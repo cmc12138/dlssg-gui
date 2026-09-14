@@ -1,0 +1,12 @@
+node_modules/
+out/
+dist/
+release/
+.npm-cache/
+.eb-cache/
+.electron-cache/
+.smoke/
+.check-download/
+.tmp-test/
+.ref/
+*.log

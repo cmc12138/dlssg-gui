@@ -1,0 +1,29 @@
+DLSSG GUI — 第三方材料说明
+================================
+
+本项目（DLSSG GUI）是一个独立的图形界面封装，源码采用 GPL-3.0-only。
+它不包含、不分发任何 NVIDIA 的运行库文件：运行库由用户自行从上游仓库下载或导入。
+
+1. 上游项目
+-----------
+sdli1995/dlssg_for_sm86 — https://github.com/sdli1995/dlssg_for_sm86
+许可：GPLv3
+本项目实现了与它配套的部署流程（复制代理 DLL + 生成 dlssg_sm86.ini + 备份还原），
+没有复制其源码。界面里的配置键说明来自其 README 与出厂 ini 文件。
+
+2. 上游发布包里的第三方材料（本仓库不含，下载后归用户本地所有）
+------------------------------------------------------------
+* nvngx_dlssg.dll（310.1 / 310.9 等版本）及其模型、前后处理：版权归 NVIDIA。
+  上游明确声明这些材料不随源码转授权，见其 THIRD_PARTY_NOTICES.txt。
+* 提取/重编译的内核资源、assets/kernels/sm75/：NVIDIA 及上游第三方材料。
+* RTX 20 系（SM75）内核族：来自 Coldwood1026 的适配工作。
+
+3. 本项目使用的开源依赖
+----------------------
+Electron (MIT)、React (MIT)、Vite (MIT)、electron-vite (MIT)、TypeScript (Apache-2.0)、
+adm-zip (MIT)、electron-builder (MIT)。完整清单见 package-lock.json。
+
+4. 免责声明
+----------
+本软件只做「复制文件、写配置、备份还原」。使用 DLL 注入类 MOD 可能导致游戏完整性校验失败、
+在带反作弊的游戏中导致封禁，请仅用于单机游戏，风险由使用者自行承担。

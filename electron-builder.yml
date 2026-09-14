@@ -1,0 +1,38 @@
+appId: gui.dlssg.app
+productName: DLSSG GUI
+copyright: 上游运行库 (dlssg_for_sm86) 采用 GPLv3，内嵌 DLL 版权归 NVIDIA 及上游作者
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - out/**
+  - package.json
+  - '!**/*.map'
+
+asar: true
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+  icon: build/icon.ico
+  artifactName: DLSSG-GUI-${version}-${arch}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: DLSSG 帧生成管理器
+  deleteAppDataOnUninstall: false
+
+portable:
+  artifactName: DLSSG-GUI-${version}-portable.exe
