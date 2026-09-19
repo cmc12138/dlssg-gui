@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type JSX } from 'react'
-import { RISKY_PROXIES, type GameLogFile, type IniConfig, type InstallPlan, type LogReadResult } from '@shared/types'
+import { RISKY_PROXIES, type GameLogFile, type IniConfig, type InstallPlan, type LogReadResult, type RefReleaseInfo, type RefStatus } from '@shared/types'
 import {
   INI_OPTIONAL_SPECS,
   OPTIMIZED_TIERS,
@@ -49,6 +49,41 @@ export function GameDetail({ gameId, onBack, onGoLibrary }: { gameId: string; on
   const [removeLogs, setRemoveLogs] = useState(true)
   const [dirDraft, setDirDraft] = useState('')
   const [catalogPick, setCatalogPick] = useState('')
+  const [refStatus, setRefStatus] = useState<RefStatus>()
+  const [refLatest, setRefLatest] = useState<RefReleaseInfo>()
+  const [refBusy, setRefBusy] = useState(false)
+
+  const refreshRef = useCallback(async (): Promise<void> => {
+    try {
+      const status = await window.api.refStatus(gameId)
+      setRefStatus(status)
+      if (status.reEngine) {
+        void window.api.refLatest(gameId).then((latest) => setRefLatest(latest ?? undefined))
+      }
+    } catch {
+      /* 忽略 */
+    }
+  }, [gameId])
+
+  useEffect(() => {
+    void refreshRef()
+  }, [refreshRef])
+
+  const installRef = useCallback(
+    async (zipPath?: string): Promise<void> => {
+      setRefBusy(true)
+      try {
+        const result = await window.api.refInstall(gameId, zipPath)
+        app.notify(result.message, result.ok ? 'ok' : 'bad')
+        await refreshRef()
+      } catch (error) {
+        app.notify(`安装失败：${(error as Error).message}`, 'bad')
+      } finally {
+        setRefBusy(false)
+      }
+    },
+    [app, gameId, refreshRef]
+  )
 
   const selectedPackage = app.packages.find((item) => item.id === packageId)
 
@@ -311,6 +346,92 @@ export function GameDetail({ gameId, onBack, onGoLibrary }: { gameId: string; on
               </Field>
             </div>
           </Card>
+
+          {(refStatus?.reEngine || refStatus?.installed || refStatus?.hasRefFiles) && (
+            <Card
+              title="卡普空 RE Engine：先装 REFramework"
+              tone={refStatus?.reEngine && !refStatus?.installed ? 'warn' : 'default'}
+              subtitle={
+                refStatus?.reEngine
+                  ? `检测到 RE Engine 特征文件（${refStatus.engineEvidence ?? 're_*.pak'}）：不装 REFramework 的话，代理 DLL 一加载游戏就直接崩在启动`
+                  : '这个目录里有 REFramework 的痕迹'
+              }
+              actions={
+                <Button size="sm" variant="ghost" onClick={() => void window.api.openExternal('https://github.com/praydog/REFramework-nightly/releases')}>
+                  打开 REFramework 下载页
+                </Button>
+              }
+            >
+              <div className="stack">
+                {refStatus?.installed && refStatus.record ? (
+                  <Alert tone="ok" title={`已安装：${refStatus.record.tag}`}>
+                    <div className="small">
+                      安装于 {formatTime(refStatus.record.installedAt)} · {refStatus.record.files.length} 个文件 · 目标{' '}
+                      <span className="mono">{refStatus.record.targetDir}</span>
+                    </div>
+                    <div className="row" style={{ marginTop: 8 }}>
+                      <Button size="sm" onClick={() => void installRef()} disabled={refBusy}>
+                        {refBusy ? '处理中…' : '重新下载安装最新版'}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="danger"
+                        onClick={async () => {
+                          setRefBusy(true)
+                          try {
+                            const result = await window.api.refRemove(gameId)
+                            app.notify(result.message, result.ok ? 'ok' : 'bad')
+                            await refreshRef()
+                          } finally {
+                            setRefBusy(false)
+                          }
+                        }}
+                        disabled={refBusy}
+                      >
+                        卸载 REFramework
+                      </Button>
+                    </div>
+                  </Alert>
+                ) : (
+                  <>
+                    <Alert tone="warn" title="为什么必须装">
+                      新一代卡普空游戏（RE Engine）会拒绝加载游戏目录里它不认识的 DLL，只放 <span className="mono">version.dll</span>{' '}
+                      会直接报错/崩在启动，而且换 <span className="mono">dxgi.dll</span>/<span className="mono">winmm.dll</span> 也一样。
+                      REFramework 是这些游戏放行的加载入口。上游 issue #77 / #40 / #560 都是这个问题，社区确认的做法就是先装它。
+                    </Alert>
+                    <ol className="list ordered">
+                      <li>点下面的按钮，把最新 REFramework 装到游戏根目录（约 13MB；装进去的是 dinput8.dll 和一个版本说明文件）</li>
+                      <li>启动一次游戏让它加载框架（这时游戏目录里会生成 reframework\ 文件夹），然后完全退出</li>
+                      <li>回到上面的「执行」重新注入代理 DLL，之后游戏里就能开 DLSS 帧生成</li>
+                    </ol>
+                    <p className="muted small">
+                      官方下载通道（github.com / release-assets.githubusercontent.com）在部分网络下连不上，本工具会自动换镜像重试；
+                      都不行时请在能上网的机器上下载 REFramework.zip，再用「用本地 ZIP 安装」。
+                    </p>
+                    <div className="row">
+                      <Button variant="primary" onClick={() => void installRef()} disabled={refBusy}>
+                        {refBusy ? '下载安装中…' : '下载并安装 REFramework'}
+                      </Button>
+                      <Button
+                        onClick={async () => {
+                          const file = await window.api.pickFile({ name: 'REFramework 压缩包', extensions: ['zip'] })
+                          if (file) void installRef(file)
+                        }}
+                        disabled={refBusy}
+                      >
+                        用本地 ZIP 安装
+                      </Button>
+                      {refLatest && (
+                        <span className="muted small">
+                          最新：{refLatest.tag}（{(refLatest.size / 1024 / 1024).toFixed(1)} MB，{formatTime(refLatest.publishedAt)}）
+                        </span>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+            </Card>
+          )}
 
           <Card
             title="运行库与代理"

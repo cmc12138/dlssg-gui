@@ -19,8 +19,17 @@ import type {
   AddGameResult,
   DuplicateReport,
   MergeResult,
+  RefReleaseInfo,
+  RefStatus,
   DetectedExe
 } from './types'
+
+/** REFramework 安装/卸载的结果 */
+export interface RefInstallOutcome {
+  ok: boolean
+  message: string
+  record?: import('./types').ReframeworkRecord
+}
 
 export interface InstallRequestPayload {
   gameId: string
@@ -75,6 +84,10 @@ export interface DshApi {
   updateGame(id: string, patch: Partial<GameEntry>): Promise<GameEntry>
   removeGame(id: string, deleteBackups?: boolean): Promise<void>
   gameStatus(id: string, withLogs?: boolean): Promise<GameStatus>
+  refStatus(id: string): Promise<RefStatus>
+  refLatest(id: string): Promise<RefReleaseInfo | null>
+  refInstall(id: string, zipPath?: string): Promise<RefInstallOutcome>
+  refRemove(id: string): Promise<RefInstallOutcome>
   launchGame(id: string): Promise<void>
   listGameLogs(id: string): Promise<GameLogFile[]>
   readLog(path: string): Promise<LogReadResult>
@@ -115,6 +128,10 @@ export const IPC = {
   gamesUpdate: 'games:update',
   gamesRemove: 'games:remove',
   gamesStatus: 'games:status',
+  refStatus: 'ref:status',
+  refLatest: 'ref:latest',
+  refInstall: 'ref:install',
+  refRemove: 'ref:remove',
   gamesLaunch: 'games:launch',
   gamesLogs: 'games:logs',
   gamesReadLog: 'games:read-log',

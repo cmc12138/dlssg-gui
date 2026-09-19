@@ -122,6 +122,44 @@ export interface HistoryEntry {
   message: string
 }
 
+/** 我们装进游戏目录的 REFramework（卡普空 RE Engine 游戏需要它才加载得了代理 DLL） */
+export interface ReframeworkRecord {
+  installedAt: string
+  /** 上游 tag，例如 nightly-01424-d1461375… */
+  tag: string
+  assetName: string
+  source: string
+  /** 安装目标目录（游戏根目录） */
+  targetDir: string
+  backupDir: string
+  files: { path: string; action: 'created' | 'replaced'; backupPath?: string; size: number }[]
+}
+
+export interface RefStatus {
+  /** 是不是卡普空 RE Engine 游戏（发现 re_chunk_*.pak / re_dlc_*.pak） */
+  reEngine: boolean
+  engineEvidence?: string
+  /** 目录里已经存在 REFramework 的痕迹（dinput8.dll / reframework 文件夹） */
+  hasRefFiles: boolean
+  installed: boolean
+  record?: ReframeworkRecord
+  /** 会把文件装到这里 */
+  targetDir: string
+  targetExists: boolean
+  error?: string
+}
+
+export interface RefReleaseInfo {
+  tag: string
+  assetName: string
+  size: number
+  publishedAt: string
+  repo: string
+  url: string
+  /** GitHub 资产 id，走 api.github.com 的 assets 接口下载（github.com 不通时这条更可靠） */
+  assetId?: number
+}
+
 export type GameState =
   | 'not-installed'
   | 'installed'
@@ -174,6 +212,8 @@ export interface GameEntry {
   dlssgCapable: boolean
   config: IniConfig
   install?: InstallRecord
+  /** 装进游戏目录的 REFramework（卡普空 RE Engine 游戏用） */
+  reframework?: ReframeworkRecord
   history: HistoryEntry[]
   notes?: string
   createdAt: string

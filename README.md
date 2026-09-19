@@ -44,6 +44,7 @@ DLSS-G 运行库塞进游戏进程，但它只有命令行/手工复制的用法
 | 一键注入 / 还原 | 预检查（阻塞项 / 提示）→ 写入 → 状态识别；还原支持「强制」与「保留日志」 |
 | 文件与备份 | 每个游戏按时间分目录备份，可回滚；保留份数可配置 |
 | 日志查看 | 直接读游戏目录 `dlssg_sm86\logs\*.jsonl`，汇总代理重定向 / 路由是否激活 / 错误行 |
+| REFramework 助手 | 认得出卡普空 RE Engine 游戏（特征文件 `re_chunk_*.pak` / `re_dlc_*.pak`），详情页一键下载安装最新 [REFramework](https://github.com/praydog/REFramework-nightly) nightly，并记进还原清单（可一键卸载、被覆盖的 `dinput8.dll` 会还原） |
 | 环境检测 | 读 `nvidia-smi` 拿显卡与驱动，判断 SM86 / SM75 / 40-50 系，给出驱动过旧的提醒 |
 
 ### 上游是怎么跟踪的
@@ -139,9 +140,12 @@ settings.json
 
 ## 验证情况（本机实测）
 
-- `npm run typecheck` 通过；`npm test` **23 项全通过**（ini 往返与档位/默认值、三态键、文件夹与 ZIP 导入、
+- `npm run typecheck` 通过；`npm test` **27 项全通过**（ini 往返与档位/默认值、三态键、文件夹与 ZIP 导入、
   注入→状态→改配置→拒绝还原→强制还原全流程、多代理不再阻塞、重复条目判定与合并（含备份迁移后仍能还原）、
-  UE/Unity 两种游戏目录布局的探测、git blob 哈希、上游树解析）。
+  UE/Unity 两种游戏目录布局的探测、REFramework 识别与安装/卸载（含 `dinput8.dll` 备份还原）、
+  git blob 哈希、上游树解析）。
+- REFramework 链路实测（2026-09-19）：识别出 nightly `01424`，经镜像下载 12.7MB 的 `REFramework.zip` → 解压 →
+  装进假游戏目录（`dinput8.dll` + `reframework_revision.txt`）→ 卸载后完全还原。
 - 真实环境扫描：读到 5 个 Steam 库、24 个游戏，0.3s 完成，**7 个**检测到 DLSS 帧生成能力
   （黑神话悟空 / COD HQ / **光与影：33 号远征队** / 死亡搁浅 2 / 无人深空 / PRAGMATA / 巫师 3 DX12），
   渲染目录全部选中正确（例如远征队 → `Sandfall\Binaries\Win64`，悟空 → `b1\Binaries\Win64`），
@@ -221,6 +225,24 @@ docs/              截图与给测试机的使用说明
 另外要区分 **AMD FSR3 帧生成**：不少游戏（33 号远征队、死亡搁浅 2 等）在渲染 EXE 旁边放了
 `amd_fidelityfx_framegeneration_dx12.dll`，这是 AMD 的帧生成，任何卡都能开，
 所以「游戏里有帧生成选项」不等于「DLSS 帧生成可用」。本工具在候选目录后面会标出「含 FSR 帧生成」。
+
+## 卡普空（RE Engine）游戏必须先装 REFramework
+
+新一代卡普空游戏（Pragmata、生化危机安魂曲、龙之信条 2、怪物猎人荒野…）会拒绝加载游戏目录里它不认识的 DLL：
+只放 `version.dll` 会**直接崩在启动**，换成 `dxgi.dll` / `winmm.dll` 也一样。
+社区确认的做法是先装 [REFramework](https://github.com/praydog/REFramework-nightly)（游戏放行的加载入口），
+上游 issue [#77](https://github.com/sdli1995/dlssg_for_sm86/issues/77) / [#40](https://github.com/sdli1995/dlssg_for_sm86/issues/40) /
+[#560](https://github.com/sdli1995/dlssg_for_sm86/issues/560) 都是这件事。上游 0.3.3 期间还额外有一个架构改写误伤导致的崩溃，0.3.4 已修。
+
+工具里的流程（认定 RE Engine 的依据是游戏目录里的 `re_chunk_*.pak` / `re_dlc_*.pak`）：
+
+1. 详情页点「下载并安装 REFramework」→ 装到游戏根目录（`dinput8.dll` + 一个版本说明文件）；
+   官方通道（`github.com` / `release-assets.githubusercontent.com`）在部分网络下连不上，会自动换镜像重试，
+   都不行就用「用本地 ZIP 安装」装手动下载的 `REFramework.zip`。
+2. 启动一次游戏让它加载框架（这时会生成 `reframework\` 文件夹），然后完全退出。
+3. 回来重新注入代理 DLL，游戏里就能开 DLSS 帧生成。
+
+装进去的文件都记在游戏条目里，点「卸载 REFramework」会删掉新建的文件、并把被覆盖的 `dinput8.dll` 还原。
 
 ## 已知限制
 

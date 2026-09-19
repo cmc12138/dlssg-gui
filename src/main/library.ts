@@ -298,7 +298,7 @@ export interface DownloadOptions {
  * api-blob 走 GitHub 的 git/blobs 接口（大文件在劣质线路上经常被中途掐断，这条兜底更稳）。
  */
 export type FetchSource =
-  | { kind: 'raw'; url: string }
+  | { kind: 'raw'; url: string; headers?: Record<string, string>; timeoutMs?: number }
   | { kind: 'api-blob'; sha: string; path: string }
 
 async function fetchApiBlob(sha: string, dest: string, errors: string[], attempt: number): Promise<boolean> {
@@ -336,12 +336,12 @@ async function fetchToFile(sources: FetchSource[], dest: string, label: string, 
           }
         } else {
           const controller = new AbortController()
-          const timer = setTimeout(() => controller.abort(), 180000)
+          const timer = setTimeout(() => controller.abort(), source.timeoutMs ?? 180000)
           try {
             const response = await fetch(source.url, {
               redirect: 'follow',
               signal: controller.signal,
-              headers: { 'user-agent': 'DLSSG-GUI' }
+              headers: { 'user-agent': 'DLSSG-GUI', ...(source.headers ?? {}) }
             })
             if (!response.ok || !response.body) {
               errors.push(`${described} → HTTP ${response.status}`)
@@ -365,6 +365,18 @@ async function fetchToFile(sources: FetchSource[], dest: string, label: string, 
     }
   }
   throw new Error(`下载失败：${label}\n${errors.join('\n')}`)
+}
+
+/** 供其它模块复用：按给定的来源列表把一个文件抓到本地（带重试与错误汇总） */
+export async function downloadSources(
+  sources: FetchSource[],
+  dest: string,
+  label: string,
+  onProgress?: ProgressCallback,
+  done = 0,
+  total = 1
+): Promise<void> {
+  return fetchToFile(sources, dest, label, onProgress, done, total)
 }
 
 /**

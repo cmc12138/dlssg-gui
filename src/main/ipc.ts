@@ -12,6 +12,7 @@ import { checkUpstream } from './upstream'
 import { listGameLogs, readLogFile } from './logs'
 import { detectGameFolder, gameKey, scanLibraries } from './scan'
 import { listDuplicateGames, mergeDuplicateGames, sameGame } from './games'
+import { fetchLatestRefRelease, getRefStatus, installReframework, uninstallReframework } from './reframework'
 import { detectEnvironment } from './env'
 import { backupsDir } from './paths'
 import { removeIfExists } from './fsutil'
@@ -217,6 +218,35 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     const game = await getGame(id)
     if (!game) throw new Error('没有找到该游戏条目')
     return getGameStatus(game, { withLogs: withLogs ?? true })
+  })
+  ipcMain.handle(IPC.refStatus, async (_event, id: string) => {
+    try {
+      return await getRefStatus(id)
+    } catch (error) {
+      throw serializeError(error)
+    }
+  })
+  ipcMain.handle(IPC.refLatest, async (_event, id: string) => {
+    try {
+      const game = await getGame(id)
+      return await fetchLatestRefRelease(game)
+    } catch {
+      return null
+    }
+  })
+  ipcMain.handle(IPC.refInstall, async (_event, id: string, zipPath?: string) => {
+    try {
+      return await installReframework(id, { zipPath, onProgress })
+    } catch (error) {
+      return { ok: false, message: `安装 REFramework 失败：${(error as Error).message}` }
+    }
+  })
+  ipcMain.handle(IPC.refRemove, async (_event, id: string) => {
+    try {
+      return await uninstallReframework(id)
+    } catch (error) {
+      return { ok: false, message: `卸载 REFramework 失败：${(error as Error).message}` }
+    }
   })
   ipcMain.handle(IPC.gamesLaunch, async (_event, id: string) => {
     const game = await getGame(id)

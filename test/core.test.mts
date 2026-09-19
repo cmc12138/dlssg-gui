@@ -16,6 +16,8 @@ const { findCandidates, detectGameFolder } = await import('../src/main/scan')
 const { ensureDataDirs } = await import('../src/main/paths')
 const { gitBlobSha, packagesFromTree } = await import('../src/main/upstream')
 const { sameGame, findExactDuplicateGroups, findDuplicateGroups, listDuplicateGames, mergeDuplicateGames } = await import('../src/main/games')
+const { getRefStatus, installReframework, uninstallReframework } = await import('../src/main/reframework')
+const AdmZipCtor = (await import('adm-zip')).default
 
 import type { GameEntry } from '../src/shared/types'
 
@@ -256,6 +258,73 @@ describe('重复条目与合并', () => {
     assert.equal(restored.ok, true, restored.message)
     assert.equal(readFileSync(join(exeDir, 'version.dll'), 'utf8'), '原始的游戏自带 version.dll')
     assert.equal(existsSync(join(exeDir, 'dlssg_sm86.ini')), false)
+  })
+})
+
+describe('REFramework（卡普空 RE Engine）', () => {
+  const root = join(workRoot, 'capcom-game')
+  const refZip = join(workRoot, 'ref-fake.zip')
+
+  before(() => {
+    // 假一个 RE Engine 游戏：re_chunk_000.pak + 一个已经存在的 dinput8.dll（会被覆盖，需备份）
+    mkdirSync(join(root, 'dlc'), { recursive: true })
+    writeFileSync(join(root, 'PRAGMATA.exe'), 'game exe')
+    writeFileSync(join(root, 're_chunk_000.pak'), Buffer.alloc(1024, 9))
+    writeFileSync(join(root, 'dlc', 're_dlc_stm_123.pak'), Buffer.alloc(128, 8))
+    writeFileSync(join(root, 'dinput8.dll'), '别人装过的 dinput8')
+
+    // 假一个 REFramework 压缩包：dinput8.dll + reframework\plugins\...
+    const AdmZip = AdmZipCtor
+    const zip = new AdmZip()
+    zip.addFile('dinput8.dll', Buffer.from('REFramework loader'))
+    zip.addFile('reframework/plugins/example.txt', Buffer.from('plugin placeholder'))
+    zip.addFile('reframework/data/version.txt', Buffer.from('nightly-fake'))
+    zip.writeZip(refZip)
+  })
+
+  it('能认出 RE Engine 游戏（re_chunk/re_dlc 特征文件）', async () => {
+    const game: GameEntry = { ...gameEntry('capcom', root), installDir: root, exeName: 'PRAGMATA.exe' }
+    await saveGame(game)
+    const status = await getRefStatus(game.id)
+    assert.equal(status.reEngine, true)
+    assert.match(status.engineEvidence ?? '', /^re_chunk_000\.pak$/)
+    assert.equal(status.installed, false)
+    assert.equal(status.hasRefFiles, true, 'dinput8.dll 已经存在，应该能看出来')
+  })
+
+  it('普通游戏不会被当成 RE Engine', async () => {
+    const other = join(workRoot, 'normal-game')
+    mkdirSync(other, { recursive: true })
+    writeFileSync(join(other, 'Game.exe'), 'x')
+    await saveGame({ ...gameEntry('normal', other), installDir: other })
+    const status = await getRefStatus('normal')
+    assert.equal(status.reEngine, false)
+  })
+
+  it('安装会把压缩包内容写进游戏目录，覆盖的文件先备份', async () => {
+    const result = await installReframework('capcom', { zipPath: refZip })
+    assert.equal(result.ok, true, result.message)
+    assert.equal(readFileSync(join(root, 'dinput8.dll'), 'utf8'), 'REFramework loader', 'dinput8.dll 应该被换成 REF 的')
+    assert.equal(existsSync(join(root, 'reframework', 'plugins', 'example.txt')), true)
+    assert.equal(existsSync(join(root, 'reframework', 'data', 'version.txt')), true)
+    assert.equal(result.record?.files.length, 3)
+    const replaced = result.record?.files.find((file) => file.path.endsWith('dinput8.dll'))
+    assert.equal(replaced?.action, 'replaced')
+    assert.ok(replaced?.backupPath && existsSync(replaced.backupPath), '原来的 dinput8.dll 要备份下来')
+    assert.equal(readFileSync(replaced!.backupPath!, 'utf8'), '别人装过的 dinput8')
+
+    const status = await getRefStatus('capcom')
+    assert.equal(status.installed, true)
+    assert.equal(status.record?.tag, '本地包')
+  })
+
+  it('卸载会删掉新建的文件、还原被覆盖的文件，并清掉空的 reframework 目录', async () => {
+    const result = await uninstallReframework('capcom')
+    assert.equal(result.ok, true, result.message)
+    assert.equal(readFileSync(join(root, 'dinput8.dll'), 'utf8'), '别人装过的 dinput8', 'dinput8.dll 要还原成原来的')
+    assert.equal(existsSync(join(root, 'reframework')), false, '空的 reframework 目录要清掉')
+    const status = await getRefStatus('capcom')
+    assert.equal(status.installed, false)
   })
 })
 

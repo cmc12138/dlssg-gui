@@ -1,0 +1,26 @@
+新增 REFramework 助手：卡普空 RE Engine 游戏一键装加载入口
+
+用户反馈：卡普空新游戏只放 version.dll 会直接崩在启动。查了上游 issue：
+- #77（龙之信条 2 / 怪物猎人荒野）、#40（Pragmata）、#560/#538（生化危机安魂曲）
+- 结论一致：新卡普空游戏会拒绝加载游戏目录里不认识的 DLL，必须先装 REFramework（它用 dinput8.dll 注入）
+- #40 里被两人复现的步骤：装 REFramework → 启动一次游戏让框架加载 → 再放代理 DLL 与 ini
+- 另外 0.3.3 那版还有一个架构改写误伤导致的启动崩溃，0.3.4 已修（与本功能无关）
+
+实现：
+- 新增 src/main/reframework.ts
+  · 识别 RE Engine：游戏目录（含 dlc 子目录）里有 re_chunk_*.pak / re_dlc_*.pak
+  · 查最新包：优先 praydog/REFramework-nightly 的 REFramework.zip；不可用时退到稳定版里按游戏
+    匹配的专用资产（RE2/RE3/RE4/RE7/RE8/DD2/MHWILDS/SF6/DMC5/MHRISE）
+  · 下载：先走 GitHub API 的资产接口（Accept: application/octet-stream），再 github.com 直链，
+    最后两个反代镜像（实测 gh-proxy.com / ghfast.top 可用，各 60s 超时，官方通道 25s 快速失败）
+  · 安装：解压后按原目录结构写进游戏根目录，覆盖任何文件前先备份；全部文件记进游戏条目
+  · 卸载：删除我们新建的文件、还原被覆盖的 dinput8.dll，并清理空的 reframework 目录
+- GameEntry 增加 reframework 记录；IPC 增加 ref:status / ref:latest / ref:install / ref:remove
+- 游戏详情页新增卡片：识别到 RE Engine 就给出原因、三步流程、一键安装/本地 ZIP/卸载，以及官方下载地址
+- 下载失败时给出可操作的提示（官方资产通道在国内常连不上 → 用本地 ZIP）
+
+其它：
+- library.ts 的下载源支持自定义请求头与超时；导出 downloadSources 供复用
+- 测试 23 → 27 项：RE Engine 识别、非 RE 游戏不误判、安装（含 dinput8.dll 备份）、卸载还原
+- tools/check-reframework.mts 端到端自检：真下载 nightly（12.7MB，经镜像）→ 安装 → 卸载，通过
+- README 增加「卡普空（RE Engine）游戏必须先装 REFramework」一节
