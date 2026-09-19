@@ -1,5 +1,5 @@
 import { useState, type JSX } from 'react'
-import { Button, ToastStack } from './components/ui'
+import { Button, ProgressStrip, ToastStack } from './components/ui'
 import { AppProvider, useApp } from './state'
 import { Dashboard } from './pages/Dashboard'
 import { Games } from './pages/Games'
@@ -57,6 +57,7 @@ function Shell(): JSX.Element {
       </aside>
 
       <main className="content">
+        <ProgressStrip event={app.progress} />
         {route.name === 'dashboard' && (
           <Dashboard
             onGoGames={() => setRoute({ name: 'games' })}

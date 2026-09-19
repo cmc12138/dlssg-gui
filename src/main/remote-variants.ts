@@ -14,10 +14,12 @@ export interface RemoteVariantSeed {
   prefix: string
   /** 出厂 ini 所在目录前缀；310.1 目录里没有 ini，用仓库根目录那份 */
   iniPrefix?: string
-  /** relPath / blobSha 给出时按仓库内真实路径下载并启用 API 兜底（动态发现上游时使用） */
-  proxies: { name: string; relPath?: string; blobSha?: string }[]
+  /** relPath / blobSha / size 给出时按仓库内真实路径下载并启用 API 兜底（动态发现上游时使用） */
+  proxies: { name: string; relPath?: string; blobSha?: string; size?: number }[]
   /** 出厂 ini 的 git blob sha，用于 API 兜底与校验 */
   iniBlobSha?: string
+  /** 出厂 ini 大小（下载进度用） */
+  iniSize?: number
   remoteRepo?: string
   remotePath?: string
   projectVersion?: string
@@ -60,8 +62,9 @@ export function seedFromUpstream(pkg: UpstreamPackage, projectVersion?: string):
     maxMultiplier: pkg.maxMultiplier,
     prefix: pkg.path,
     iniPrefix,
-    proxies: pkg.proxies.map((proxy) => ({ name: proxy.name, relPath: proxy.path, blobSha: proxy.blobSha })),
+    proxies: pkg.proxies.map((proxy) => ({ name: proxy.name, relPath: proxy.path, blobSha: proxy.blobSha, size: proxy.size })),
     iniBlobSha: pkg.iniBlobSha,
+    iniSize: pkg.iniSize,
     remoteRepo: REPO,
     remotePath: pkg.path,
     projectVersion

@@ -300,7 +300,13 @@ export function Library(): JSX.Element {
                           disabled={rowBusy}
                           onClick={() => void downloadFromUpstream(pkg.path)}
                         >
-                          {rowBusy ? '下载中…' : pkg.localPackageId ? (pkg.updateAvailable ? '更新' : '重新下载') : '下载'}
+                          {rowBusy
+                            ? `下载中 ${Math.round((app.progress?.overall ?? 0) * 100)}%`
+                            : pkg.localPackageId
+                              ? pkg.updateAvailable
+                                ? '更新'
+                                : '重新下载'
+                              : '下载'}
                         </Button>
                       </td>
                     </tr>
@@ -425,7 +431,7 @@ export function Library(): JSX.Element {
                   disabled={remoteBusy}
                   onClick={() => void download(variant)}
                 >
-                  {busy === variant.id ? '下载中…' : '下载'}
+                  {busy === variant.id ? `下载中 ${Math.round((app.progress?.overall ?? 0) * 100)}%` : '下载'}
                 </Button>
               </div>
             ))}

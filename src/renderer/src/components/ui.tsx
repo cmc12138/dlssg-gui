@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode, type CSSProperties, type JSX } from 'react'
+import type { ProgressEvent } from '@shared/types'
+import { humanSize } from '../lib/format'
 
 export function Button({
   children,
@@ -210,6 +212,38 @@ export function ProgressBar({ done, total, label }: { done: number; total: numbe
         {label ? `${label} · ` : ''}
         {percent}%
       </span>
+    </div>
+  )
+}
+
+/** 下载/写入进行中的悬浮进度条：能看到字节数、第几项、总体百分比 */
+export function ProgressStrip({ event }: { event?: ProgressEvent }): JSX.Element | null {
+  if (!event) return null
+  const overall = event.overall ?? (event.total > 0 ? Math.min(1, event.done / event.total) : 0)
+  const percent = Math.max(0, Math.min(100, Math.round(overall * 100)))
+  const bytes =
+    event.received !== undefined && event.totalBytes !== undefined && event.totalBytes > 0
+      ? `${humanSize(event.received)} / ${humanSize(event.totalBytes)}`
+      : event.received !== undefined
+        ? humanSize(event.received)
+        : ''
+  const idle = event.finished === true
+  return (
+    <div className={`progress-strip${idle ? ' progress-strip-done' : ''}`}>
+      {idle ? <span className="progress-strip-check">✓</span> : <span className="spinner" />}
+      <span className="progress-strip-label" title={event.label}>
+        {event.label}
+      </span>
+      {event.total > 1 && (
+        <span className="muted small">
+          第 {Math.min(event.total, event.done + (idle ? 0 : 1))}/{event.total} 项
+        </span>
+      )}
+      {bytes && <span className="muted small mono">{bytes}</span>}
+      <div className="progress-strip-bar">
+        <div className="progress-strip-fill" style={{ width: `${percent}%` }} />
+      </div>
+      <span className="progress-strip-percent">{percent}%</span>
     </div>
   )
 }

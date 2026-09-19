@@ -18,6 +18,7 @@ import {
   Field,
   Modal,
   NumberInput,
+  ProgressBar,
   Select,
   Spinner,
   Tabs,
@@ -421,12 +422,25 @@ export function GameDetail({ gameId, onBack, onGoLibrary }: { gameId: string; on
                       >
                         用本地 ZIP 安装
                       </Button>
-                      {refLatest && (
+                      {refLatest && !refBusy && (
                         <span className="muted small">
                           最新：{refLatest.tag}（{(refLatest.size / 1024 / 1024).toFixed(1)} MB，{formatTime(refLatest.publishedAt)}）
                         </span>
                       )}
                     </div>
+                    {refBusy && app.progress && (app.progress.scope === 'download' || app.progress.scope === 'import') && (
+                      <div className="stack">
+                        <ProgressBar
+                          done={app.progress.done}
+                          total={app.progress.total}
+                          label={`${app.progress.label}${
+                            app.progress.received !== undefined && app.progress.totalBytes
+                              ? ` · ${humanSize(app.progress.received)} / ${humanSize(app.progress.totalBytes)}`
+                              : ''
+                          }`}
+                        />
+                      </div>
+                    )}
                   </>
                 )}
               </div>

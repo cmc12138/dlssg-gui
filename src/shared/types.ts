@@ -298,9 +298,18 @@ export interface BackupEntry {
 /** 主进程 → 渲染进程的进度事件 */
 export interface ProgressEvent {
   scope: 'scan' | 'import' | 'download' | 'install'
+  /** 已完成的项目数（下载时 = 已下完的文件数） */
   done: number
+  /** 总项目数（下载时 = 文件个数） */
   total: number
   label: string
+  /** 当前这个文件的字节进度 */
+  received?: number
+  totalBytes?: number
+  /** 总体进度 0–1；下载多文件时会把当前文件已下的比例也算进去 */
+  overall?: number
+  /** 当前这一步是否已经结束（用于界面判停） */
+  finished?: boolean
 }
 
 export interface InstallPlanAction {

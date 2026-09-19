@@ -119,13 +119,20 @@ export function AppProvider({ children }: { children: ReactNode }): JSX.Element 
   }, [refreshStatuses])
 
   useEffect(() => {
+    let hideTimer: number | undefined
     const off = window.api.onProgress((event) => {
       setProgress(event)
       if (event.scope === 'scan') {
         setScan((current) => ({ ...current, running: true, progress: event }))
       }
+      // 完成提示留 4 秒；中途没有新事件（比如失败了）20 秒后自动收起
+      if (hideTimer) window.clearTimeout(hideTimer)
+      hideTimer = window.setTimeout(() => setProgress(undefined), event.finished ? 4000 : 20000)
     })
-    return off
+    return () => {
+      off()
+      if (hideTimer) window.clearTimeout(hideTimer)
+    }
   }, [])
 
   const value = useMemo<AppData>(

@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process'
 import { readFile, readdir, rm, stat } from 'node:fs/promises'
 import { basename, join, relative, resolve, sep } from 'node:path'
 import AdmZip from 'adm-zip'
-import type { ImportResult, PackageSource, RuntimePackage, ProxyFile, VerifyResult } from '@shared/types'
+import type { ImportResult, PackageSource, ProgressEvent, RuntimePackage, ProxyFile, VerifyResult } from '@shared/types'
 import { KNOWN_PROXIES } from '@shared/types'
 import { deletePackageRecord, getPackage, listPackages, savePackage } from './db'
 import { downloadsDir, ensureDataDirs, packagesDir } from './paths'
@@ -14,7 +14,7 @@ import { gitBlobSha } from './upstream'
 const ALTERNATIVE_DIR_NAMES = new Set(['alternatives', 'altnative'])
 
 export interface ProgressCallback {
-  (event: { scope: 'import' | 'download'; done: number; total: number; label: string }): void
+  (event: ProgressEvent): void
 }
 
 import type { RemoteVariantSeed } from './remote-variants'
@@ -323,15 +323,40 @@ async function fetchApiBlob(sha: string, dest: string, errors: string[], attempt
   return true
 }
 
-async function fetchToFile(sources: FetchSource[], dest: string, label: string, onProgress?: ProgressCallback, done = 0, total = 1): Promise<void> {
+/**
+ * 抓一个文件到本地。下载过程中会按字节持续上报进度（每 200ms 或每 1% 一次），
+ * 界面上才能看到"到底有没有在动"，而不是只有一个"下载中"。
+ */
+async function fetchToFile(
+  sources: FetchSource[],
+  dest: string,
+  label: string,
+  onProgress?: ProgressCallback,
+  done = 0,
+  total = 1,
+  expectedSize = 0
+): Promise<void> {
   const errors: string[] = []
+  const overallOf = (received: number, totalBytes: number): number => {
+    const fileFraction = totalBytes > 0 ? Math.min(1, received / totalBytes) : 0
+    return total > 0 ? Math.min(1, (done + fileFraction) / total) : 0
+  }
   for (const source of sources) {
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       const described = source.kind === 'raw' ? source.url : `api-blob ${source.path}`
       try {
         if (source.kind === 'api-blob') {
           if (await fetchApiBlob(source.sha, dest, errors, attempt)) {
-            onProgress?.({ scope: 'download', done, total, label })
+            onProgress?.({
+              scope: 'download',
+              done: done + 1,
+              total,
+              label,
+              received: expectedSize,
+              totalBytes: expectedSize,
+              overall: overallOf(expectedSize, expectedSize),
+              finished: done + 1 >= total
+            })
             return
           }
         } else {
@@ -347,15 +372,47 @@ async function fetchToFile(sources: FetchSource[], dest: string, label: string, 
               errors.push(`${described} → HTTP ${response.status}`)
               break
             }
-            const { Readable } = await import('node:stream')
+            const { Readable, Transform } = await import('node:stream')
             const { createWriteStream } = await import('node:fs')
             const { pipeline } = await import('node:stream/promises')
+            const headerSize = Number(response.headers.get('content-length') ?? 0)
+            const totalBytes = Number.isFinite(headerSize) && headerSize > 0 ? headerSize : expectedSize
+            let received = 0
+            let lastEmit = 0
+            const counter = new Transform({
+              transform(chunk: Buffer, _encoding, callback) {
+                received += chunk.length
+                const now = Date.now()
+                if (now - lastEmit > 200 || (totalBytes > 0 && received >= totalBytes)) {
+                  lastEmit = now
+                  onProgress?.({
+                    scope: 'download',
+                    done,
+                    total,
+                    label,
+                    received,
+                    totalBytes,
+                    overall: overallOf(received, totalBytes)
+                  })
+                }
+                callback(null, chunk)
+              }
+            })
             const stream = Readable.fromWeb(response.body as never)
-            await pipeline(stream, createWriteStream(dest))
+            await pipeline(stream, counter, createWriteStream(dest))
+            onProgress?.({
+              scope: 'download',
+              done: done + 1,
+              total,
+              label,
+              received: totalBytes > 0 ? totalBytes : received,
+              totalBytes: totalBytes > 0 ? totalBytes : received,
+              overall: overallOf(totalBytes > 0 ? totalBytes : received, totalBytes > 0 ? totalBytes : received),
+              finished: done + 1 >= total
+            })
           } finally {
             clearTimeout(timer)
           }
-          onProgress?.({ scope: 'download', done, total, label })
           return
         }
       } catch (error) {
@@ -367,16 +424,17 @@ async function fetchToFile(sources: FetchSource[], dest: string, label: string, 
   throw new Error(`下载失败：${label}\n${errors.join('\n')}`)
 }
 
-/** 供其它模块复用：按给定的来源列表把一个文件抓到本地（带重试与错误汇总） */
+/** 供其它模块复用：按给定的来源列表把一个文件抓到本地（带重试与逐字节进度） */
 export async function downloadSources(
   sources: FetchSource[],
   dest: string,
   label: string,
   onProgress?: ProgressCallback,
   done = 0,
-  total = 1
+  total = 1,
+  expectedSize = 0
 ): Promise<void> {
-  return fetchToFile(sources, dest, label, onProgress, done, total)
+  return fetchToFile(sources, dest, label, onProgress, done, total, expectedSize)
 }
 
 /**
@@ -405,7 +463,8 @@ export async function downloadVariant(variant: RemoteVariantSeed, options: Downl
   const remote = selectedProxies.map((proxy) => ({
     name: proxy.name,
     rel: proxy.relPath ?? (proxy.name === 'version.dll' ? `${prefix}version.dll` : `${prefix}alternatives/${proxy.name}`),
-    blobSha: proxy.blobSha
+    blobSha: proxy.blobSha,
+    size: proxy.size ?? 0
   }))
 
   const sourcesFor = (rel: string, blobSha: string | undefined): FetchSource[] => {
@@ -422,7 +481,7 @@ export async function downloadVariant(variant: RemoteVariantSeed, options: Downl
     for (const item of remote) {
       const dest = item.name === 'version.dll' ? join(tempDir, 'version.dll') : join(tempDir, 'alternatives', item.name)
       await ensureDir(item.name === 'version.dll' ? tempDir : join(tempDir, 'alternatives'))
-      await fetchToFile(sourcesFor(item.rel, item.blobSha), dest, `下载 ${item.name}`, options.onProgress, done, total)
+      await fetchToFile(sourcesFor(item.rel, item.blobSha), dest, `下载 ${item.name}`, options.onProgress, done, total, item.size)
       done += 1
     }
     const iniRel = `${iniPrefix}dlssg_sm86.ini`
@@ -432,7 +491,8 @@ export async function downloadVariant(variant: RemoteVariantSeed, options: Downl
       '下载配置模板',
       options.onProgress,
       done,
-      total
+      total,
+      variant.iniSize ?? 0
     )
 
     // 记录仓库内每个文件的 git blob sha，之后「检查上游更新」直接比对即可

@@ -4,7 +4,7 @@ import type { GameEntry, RefReleaseInfo, RefStatus, ReframeworkRecord } from '@s
 import { getGame, saveGame } from './db'
 import { backupsDir, downloadsDir } from './paths'
 import { atomicCopyFile, ensureDir, pathExists, removeIfExists } from './fsutil'
-import { downloadSources, extractZip, type FetchSource } from './library'
+import { downloadSources, extractZip, type FetchSource, type ProgressCallback } from './library'
 
 /** 卡普空 RE Engine 的特征文件：re_chunk_000.pak / re_dlc_xxx.pak（含 .sub_000.pak、.patch_00N.pak 变体） */
 const RE_ENGINE_PAK = /^re_(chunk|dlc)_.*\.pak$/i
@@ -161,7 +161,7 @@ export interface RefInstallResult {
  */
 export async function installReframework(
   gameId: string,
-  options: { zipPath?: string; onProgress?: (event: { scope: 'download' | 'import'; done: number; total: number; label: string }) => void } = {}
+  options: { zipPath?: string; onProgress?: ProgressCallback } = {}
 ): Promise<RefInstallResult> {
   const game = await getGame(gameId)
   if (!game) return { ok: false, message: '没有找到该游戏条目' }
@@ -205,7 +205,8 @@ export async function installReframework(
         `下载 ${release.assetName}（${(release.size / 1024 / 1024).toFixed(1)} MB）`,
         options.onProgress,
         0,
-        2
+        2,
+        release.size
       )
       zipPath = zipDest
     }

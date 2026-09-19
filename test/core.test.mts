@@ -1,5 +1,5 @@
 import { strict as assert } from 'node:assert'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, before, describe, it } from 'node:test'
@@ -9,7 +9,7 @@ const workRoot = mkdtempSync(join(tmpdir(), 'dlssg-gui-test-'))
 process.env.DLSSG_GUI_DATA_DIR = join(workRoot, 'data')
 
 const { defaultIniConfig, parseIniConfig, serializeIniConfig, normalizeIniConfig } = await import('../src/shared/ini-schema')
-const { detectPackages, importFromFolder, importFromZip } = await import('../src/main/library')
+const { detectPackages, importFromFolder, importFromZip, downloadSources } = await import('../src/main/library')
 const { applyInstall, getGameStatus, planInstall, restoreGame, updateIniOnly } = await import('../src/main/inject')
 const { getPackage, listPackages, saveGame, listGames } = await import('../src/main/db')
 const { findCandidates, detectGameFolder } = await import('../src/main/scan')
@@ -325,6 +325,58 @@ describe('REFramework（卡普空 RE Engine）', () => {
     assert.equal(existsSync(join(root, 'reframework')), false, '空的 reframework 目录要清掉')
     const status = await getRefStatus('capcom')
     assert.equal(status.installed, false)
+  })
+})
+
+describe('下载进度', () => {
+  it('按字节持续上报进度，并带上总体比例与结束标记', async () => {
+    const { createServer } = await import('node:http')
+    const total = 8 * 1024 * 1024
+    const chunk = Buffer.alloc(128 * 1024, 7)
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': String(total) })
+      let sent = 0
+      const timer = setInterval(() => {
+        if (sent >= total) {
+          clearInterval(timer)
+          response.end()
+          return
+        }
+        response.write(chunk)
+        sent += chunk.length
+      }, 25)
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()))
+    const port = (server.address() as { port: number }).port
+    const dest = join(workRoot, 'progress-test.bin')
+    const events: { received?: number; totalBytes?: number; overall?: number; finished?: boolean }[] = []
+    try {
+      await downloadSources(
+        [{ kind: 'raw', url: `http://127.0.0.1:${port}/big.bin` }],
+        dest,
+        '测试下载',
+        (event) => events.push(event),
+        0,
+        1,
+        total
+      )
+    } finally {
+      server.close()
+    }
+
+    assert.ok(events.length >= 3, `应该多次上报进度，实际只上报 ${events.length} 次`)
+    const bytes = events.map((event) => event.received).filter((value): value is number => typeof value === 'number')
+    assert.ok(bytes.length >= 3, '每次上报都应该带字节数')
+    assert.ok(bytes[bytes.length - 1] >= total * 0.99, `最后一次应接近总大小，实际 ${bytes[bytes.length - 1]}`)
+    for (let index = 1; index < bytes.length; index += 1) {
+      assert.ok(bytes[index] >= bytes[index - 1], '字节数应该单调递增')
+    }
+    assert.ok(
+      events.some((event) => (event.overall ?? 0) > 0.3 && (event.overall ?? 0) < 0.95),
+      '中途应该有 0–1 之间的总体比例，界面才能显示真实百分比'
+    )
+    assert.equal(events[events.length - 1].finished, true, '最后一个事件应带结束标记')
+    assert.equal(statSync(dest).size, total, '文件应该完整落盘')
   })
 })
 
