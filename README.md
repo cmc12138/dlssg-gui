@@ -75,8 +75,11 @@ npm test             # 核心逻辑单元测试（ini、导入、注入、还原
 # 真实环境跑一遍 Steam/Epic/GOG 扫描 + DLSS-G 能力探测（只读）
 node --import ./test/loader.mjs tools/check-scan.mts
 
-# 验证「从 GitHub 下载运行库」整条链路：会真的下载约 110MB 到数据目录后校验并清理
+# 验证「上游发现 + 下载 + 哈希 + 更新比对」整条链路：会真的下载主分支发布包到数据目录后校验并清理
 $env:DLSSG_GUI_DATA_DIR="$PWD\.check-download"; node --import ./test/loader.mjs tools/check-download.mts
+
+# 看看上游仓库现在有什么（只读，走 GitHub API）
+node tools/upstream-diff.mjs
 
 # 检查 IPC 频道在 shared / preload / 主进程三处是否一致
 node tools/check-ipc.mjs
@@ -84,6 +87,18 @@ node tools/check-ipc.mjs
 # 重新生成图标
 node tools/make-icon.mjs
 ```
+
+### 推不上去的时候
+
+`github.com:443` 在某些网络下会被重置/超时（`api.github.com`、`codeload.github.com` 却正常），这时 `git push` 用不了。
+`tools/api-push.mjs` 用 Git 数据 API 走 `api.github.com` 把本地提交原样推上去：逐个上传 blob（内容取自本地对象库，
+blob sha 一致）→ 用 `base_tree` 建树 → 建 commit → 移动分支引用；作者/提交时间/消息都对齐本地，
+所以正常情况下生成的 commit sha 与本地完全相同，不会分叉。需要 `gh` 已登录。
+
+```powershell
+node tools/api-push.mjs            # 默认 origin/main
+```
+
 
 界面自检：设置 `DLSSG_GUI_SCREENSHOT=<png 路径>` 启动程序，加载完成 3 秒后会自动截图并退出，
 用来确认打包产物能正常渲染。
