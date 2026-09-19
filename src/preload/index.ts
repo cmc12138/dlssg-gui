@@ -15,6 +15,7 @@ const api: DshApi = {
   downloadVariant: (id: string) => ipcRenderer.invoke(IPC.packagesDownload, id),
   removePackage: (id: string) => ipcRenderer.invoke(IPC.packagesRemove, id),
   verifyPackage: (id: string) => ipcRenderer.invoke(IPC.packagesVerify, id),
+  checkUpstream: (force?: boolean) => ipcRenderer.invoke(IPC.upstreamCheck, force),
 
   listGames: () => ipcRenderer.invoke(IPC.gamesList),
   scanGames: () => ipcRenderer.invoke(IPC.gamesScan),

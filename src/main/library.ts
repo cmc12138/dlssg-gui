@@ -7,8 +7,9 @@ import type { ImportResult, PackageSource, RuntimePackage, ProxyFile, VerifyResu
 import { KNOWN_PROXIES } from '@shared/types'
 import { deletePackageRecord, getPackage, listPackages, savePackage } from './db'
 import { downloadsDir, ensureDataDirs, packagesDir } from './paths'
-import { MIRROR_BASE, RAW_BASE, REPO } from './repo'
+import { GITHUB_API, MIRROR_BASE, RAW_BASE, REPO } from './repo'
 import { atomicCopyFile, atomicWriteFile, ensureDir, humanSize, isPortableExecutable, pathExists, sha256File } from './fsutil'
+import { gitBlobSha } from './upstream'
 
 const ALTERNATIVE_DIR_NAMES = new Set(['alternatives', 'altnative'])
 
@@ -37,8 +38,9 @@ function slug(input: string): string {
     .slice(0, 48)
 }
 
+/** 从注释 / README 里挑运行库版本号（312.1 这类未来版本也能认出来） */
 function parseVersionFromText(text: string): string | undefined {
-  const match = /(310\.\d+(?:\.\d+)?)/.exec(text)
+  const match = /(\d{3}\.\d+(?:\.\d+)?)/.exec(text)
   return match?.[1]
 }
 
@@ -57,13 +59,13 @@ function metaForRelRoot(relRoot: string, evidence: string): { name: string; runt
   const mentions6x = /6X|Dynamic MFG|MaxGeneratedFrames\s*=\s*5/i.test(evidence)
   if (relRoot === '') {
     return {
-      name: 'DLSSG for SM86 310.9（主分支）',
+      name: `DLSSG for SM86 ${found ?? '主分支'}（主分支）`,
       runtimeVersion: found ?? '310.9',
-      maxMultiplier: mentions6x ? 6 : 6
+      maxMultiplier: 6
     }
   }
   const versionDir = basename(relRoot)
-  if (/^310\.\d/.test(versionDir)) {
+  if (/^\d{3}\.\d/.test(versionDir)) {
     return { name: `DLSSG for SM86 ${versionDir}`, runtimeVersion: versionDir, maxMultiplier: 4 }
   }
   if (relRoot.startsWith('archive')) {
@@ -284,78 +286,151 @@ export async function importFromZip(zipPath: string, onProgress?: ProgressCallba
 export interface DownloadOptions {
   onProgress?: ProgressCallback
   preferMirror?: boolean
+  /**
+   * 是否连 alternatives 里的其它代理名一起下载。默认 false：
+   * 只下 version.dll（30MB 级），全部代理要 180MB，慢线路上代价很大。
+   */
+  includeAlternatives?: boolean
 }
 
-async function fetchToFile(urls: string[], dest: string, label: string, onProgress?: ProgressCallback, done = 0, total = 1): Promise<void> {
+/**
+ * 一个文件的下载来源。raw 走 raw.githubusercontent.com / 镜像直链；
+ * api-blob 走 GitHub 的 git/blobs 接口（大文件在劣质线路上经常被中途掐断，这条兜底更稳）。
+ */
+export type FetchSource =
+  | { kind: 'raw'; url: string }
+  | { kind: 'api-blob'; sha: string; path: string }
+
+async function fetchApiBlob(sha: string, dest: string, errors: string[], attempt: number): Promise<boolean> {
+  const response = await fetch(`${GITHUB_API}/git/blobs/${sha}`, {
+    headers: { 'user-agent': 'DLSSG-GUI', accept: 'application/vnd.github+json' }
+  })
+  if (!response.ok) {
+    errors.push(`git/blobs ${sha.slice(0, 8)}（第 ${attempt} 次）→ HTTP ${response.status}`)
+    return false
+  }
+  const payload = (await response.json()) as { content?: string; encoding?: string }
+  if (!payload.content) {
+    errors.push(`git/blobs ${sha.slice(0, 8)}（第 ${attempt} 次）→ 响应里没有内容`)
+    return false
+  }
+  const buffer = Buffer.from(payload.content, payload.encoding === 'base64' ? 'base64' : 'utf8')
+  if (gitBlobSha(buffer) !== sha) {
+    errors.push(`git/blobs ${sha.slice(0, 8)}（第 ${attempt} 次）→ 校验和不匹配`)
+    return false
+  }
+  await atomicWriteFile(dest, buffer)
+  return true
+}
+
+async function fetchToFile(sources: FetchSource[], dest: string, label: string, onProgress?: ProgressCallback, done = 0, total = 1): Promise<void> {
   const errors: string[] = []
-  for (const url of urls) {
+  for (const source of sources) {
     for (let attempt = 1; attempt <= 2; attempt += 1) {
-      const controller = new AbortController()
-      const timer = setTimeout(() => controller.abort(), 120000)
+      const described = source.kind === 'raw' ? source.url : `api-blob ${source.path}`
       try {
-        const response = await fetch(url, {
-          redirect: 'follow',
-          signal: controller.signal,
-          headers: { 'user-agent': 'DLSSG-GUI' }
-        })
-        if (!response.ok || !response.body) {
-          errors.push(`${url} → HTTP ${response.status}`)
-          clearTimeout(timer)
-          break
+        if (source.kind === 'api-blob') {
+          if (await fetchApiBlob(source.sha, dest, errors, attempt)) {
+            onProgress?.({ scope: 'download', done, total, label })
+            return
+          }
+        } else {
+          const controller = new AbortController()
+          const timer = setTimeout(() => controller.abort(), 180000)
+          try {
+            const response = await fetch(source.url, {
+              redirect: 'follow',
+              signal: controller.signal,
+              headers: { 'user-agent': 'DLSSG-GUI' }
+            })
+            if (!response.ok || !response.body) {
+              errors.push(`${described} → HTTP ${response.status}`)
+              break
+            }
+            const { Readable } = await import('node:stream')
+            const { createWriteStream } = await import('node:fs')
+            const { pipeline } = await import('node:stream/promises')
+            const stream = Readable.fromWeb(response.body as never)
+            await pipeline(stream, createWriteStream(dest))
+          } finally {
+            clearTimeout(timer)
+          }
+          onProgress?.({ scope: 'download', done, total, label })
+          return
         }
-        const { Readable } = await import('node:stream')
-        const { createWriteStream } = await import('node:fs')
-        const { pipeline } = await import('node:stream/promises')
-        const stream = Readable.fromWeb(response.body as never)
-        await pipeline(stream, createWriteStream(dest))
-        clearTimeout(timer)
-        onProgress?.({ scope: 'download', done, total, label })
-        return
       } catch (error) {
-        clearTimeout(timer)
-        errors.push(`${url}（第 ${attempt} 次）→ ${String(error)}`)
-        await new Promise((resolve) => setTimeout(resolve, 800 * attempt))
+        errors.push(`${described}（第 ${attempt} 次）→ ${String(error)}`)
       }
+      await new Promise((resolve) => setTimeout(resolve, 1000 * attempt))
     }
   }
   throw new Error(`下载失败：${label}\n${errors.join('\n')}`)
 }
 
-/** 从 GitHub 下载指定变体（主分支 310.9 / 310.1 目录）。 */
+/**
+ * 从 GitHub 下载指定变体。变体可以来自动态发现（relPath 是仓库内真实路径），
+ * 也可以来自静态兜底（按 prefix + 约定文件名拼路径）。
+ */
 export async function downloadVariant(variant: RemoteVariantSeed, options: DownloadOptions = {}): Promise<RuntimePackage> {
   ensureDataDirs()
   const prefix = variant.prefix ? `${variant.prefix}/` : ''
-  const iniPrefix = (variant.iniPrefix ?? variant.prefix) ? `${variant.iniPrefix ?? variant.prefix}/` : ''
+  const iniPrefixValue = variant.iniPrefix !== undefined ? variant.iniPrefix : variant.prefix
+  const iniPrefix = iniPrefixValue ? `${iniPrefixValue}/` : ''
   const tempDir = join(downloadsDir(), `variant-${variant.id}-${Date.now()}`)
   await ensureDir(tempDir)
-  const total = variant.proxies.length + 1
+
+  // 默认只下主代理：上游说一个代理就够用，其余只是"游戏不加载 version.dll"时的备选，
+  // 没必要在慢线路上多拖 150MB。
+  const wantedProxies =
+    options.includeAlternatives === true
+      ? variant.proxies
+      : variant.proxies.filter((proxy) => proxy.name.toLowerCase() === 'version.dll').slice(0, 1)
+  const selectedProxies = wantedProxies.length > 0 ? wantedProxies : variant.proxies.slice(0, 1)
+
+  const total = selectedProxies.length + 1
   let done = 0
 
-  const remote = variant.proxies.map((proxy) => {
-    const rel = proxy.name === 'version.dll' ? `${prefix}version.dll` : `${prefix}alternatives/${proxy.name}`
-    return { name: proxy.name, rel }
-  })
+  const remote = selectedProxies.map((proxy) => ({
+    name: proxy.name,
+    rel: proxy.relPath ?? (proxy.name === 'version.dll' ? `${prefix}version.dll` : `${prefix}alternatives/${proxy.name}`),
+    blobSha: proxy.blobSha
+  }))
+
+  const sourcesFor = (rel: string, blobSha: string | undefined): FetchSource[] => {
+    const raw: FetchSource = { kind: 'raw', url: `${RAW_BASE}/${rel}` }
+    const mirror: FetchSource = { kind: 'raw', url: `${MIRROR_BASE}/${rel}` }
+    // 顺序很讲究：直链最快但在这类线路上容易被中途掐断，所以只给它两次机会，
+    // 立刻转用 GitHub API 的 blob 接口（唯一一条顺带校验哈希的可靠通道），镜像放最后。
+    const sources: FetchSource[] = options.preferMirror ? [mirror, raw] : [raw, mirror]
+    if (blobSha) sources.splice(sources.length - 1, 0, { kind: 'api-blob', sha: blobSha, path: rel })
+    return sources
+  }
 
   try {
     for (const item of remote) {
-      const url = `${RAW_BASE}/${item.rel}`
-      const mirror = `${MIRROR_BASE}/${item.rel}`
-      const urls = options.preferMirror ? [mirror, url] : [url, mirror]
       const dest = item.name === 'version.dll' ? join(tempDir, 'version.dll') : join(tempDir, 'alternatives', item.name)
       await ensureDir(item.name === 'version.dll' ? tempDir : join(tempDir, 'alternatives'))
-      await fetchToFile(urls, dest, `下载 ${item.name}`, options.onProgress, done, total)
+      await fetchToFile(sourcesFor(item.rel, item.blobSha), dest, `下载 ${item.name}`, options.onProgress, done, total)
       done += 1
     }
+    const iniRel = `${iniPrefix}dlssg_sm86.ini`
     await fetchToFile(
-      options.preferMirror
-        ? [`${MIRROR_BASE}/${iniPrefix}dlssg_sm86.ini`, `${RAW_BASE}/${iniPrefix}dlssg_sm86.ini`]
-        : [`${RAW_BASE}/${iniPrefix}dlssg_sm86.ini`, `${MIRROR_BASE}/${iniPrefix}dlssg_sm86.ini`],
+      sourcesFor(iniRel, variant.iniBlobSha),
       join(tempDir, 'dlssg_sm86.ini'),
       '下载配置模板',
       options.onProgress,
       done,
       total
     )
+
+    // 记录仓库内每个文件的 git blob sha，之后「检查上游更新」直接比对即可
+    const remoteBlobs: Record<string, string> = {}
+    for (const item of remote) {
+      const file = item.name === 'version.dll' ? join(tempDir, 'version.dll') : join(tempDir, 'alternatives', item.name)
+      remoteBlobs[item.rel] = gitBlobSha(await readFile(file))
+    }
+    remoteBlobs[iniRel] = gitBlobSha(await readFile(join(tempDir, 'dlssg_sm86.ini')))
+
     const result = await importFromFolder(tempDir, options.onProgress, 'github')
     const pkg = result.packages[0]
     if (!pkg) throw new Error('下载完成但没有识别出发布包')
@@ -364,6 +439,10 @@ export async function downloadVariant(variant: RemoteVariantSeed, options: Downl
     pkg.name = variant.name
     pkg.runtimeVersion = variant.runtimeVersion
     pkg.maxMultiplier = variant.maxMultiplier
+    pkg.remoteRepo = variant.remoteRepo ?? REPO
+    pkg.remotePath = variant.remotePath ?? variant.prefix
+    pkg.remoteBlobs = remoteBlobs
+    pkg.projectVersion = variant.projectVersion
     await savePackage(pkg)
     return pkg
   } finally {

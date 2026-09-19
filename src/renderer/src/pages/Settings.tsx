@@ -69,12 +69,23 @@ export function Settings(): JSX.Element {
       </Card>
 
       <Card title="下载">
-        <Toggle
-          checked={settings.preferMirror}
-          onChange={(value) => void app.updateSettings({ preferMirror: value })}
-          label="优先使用镜像加速"
-          hint="下载运行库时先尝试 raw.gitmirror.com，失败会自动回退官方地址"
-        />
+        <div className="stack">
+          <Toggle
+            checked={settings.downloadAllProxies}
+            onChange={(value) => void app.updateSettings({ downloadAllProxies: value })}
+            label="连其它代理名一起下载"
+            hint="关闭（推荐）只下 version.dll，约 30MB；打开会额外下 winmm/dbghelp/dinput8/dxgi/d3d12，总共约 180MB。只有游戏不加载 version.dll 时才需要备选代理名"
+          />
+          <Toggle
+            checked={settings.preferMirror}
+            onChange={(value) => void app.updateSettings({ preferMirror: value })}
+            label="优先使用镜像加速"
+            hint="先试 raw.gitmirror.com（这个域名在你所在网络不一定能解析），失败自动回退官方地址；两条直链都失败时还有 GitHub API 兜底通道"
+          />
+          <p className="muted small">
+            下载体积参考：上游 0.3.4 的主分支发布包，version.dll 约 28.6MB，每个备选代理也是这个量级，出厂 ini 只有几 KB。
+          </p>
+        </div>
       </Card>
 
       <Card title="使用须知" tone="warn">

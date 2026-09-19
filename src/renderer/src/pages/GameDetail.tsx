@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useMemo, useState, type JSX } from 'react'
 import { RISKY_PROXIES, type GameLogFile, type IniConfig, type InstallPlan, type LogReadResult } from '@shared/types'
-import { defaultIniConfig, maxMultiplierForFrames, normalizeIniConfig, serializeIniConfig } from '@shared/ini-schema'
+import {
+  INI_OPTIONAL_SPECS,
+  OPTIMIZED_TIERS,
+  defaultIniConfig,
+  findSpec,
+  maxMultiplierForFrames,
+  normalizeIniConfig,
+  serializeIniConfig
+} from '@shared/ini-schema'
 import {
   Alert,
   Badge,
@@ -9,6 +17,7 @@ import {
   EmptyState,
   Field,
   Modal,
+  NumberInput,
   Select,
   Spinner,
   Tabs,
@@ -39,8 +48,27 @@ export function GameDetail({ gameId, onBack, onGoLibrary }: { gameId: string; on
   const [restoreForce, setRestoreForce] = useState(false)
   const [removeLogs, setRemoveLogs] = useState(true)
   const [dirDraft, setDirDraft] = useState('')
+  const [catalogPick, setCatalogPick] = useState('')
 
   const selectedPackage = app.packages.find((item) => item.id === packageId)
+
+  const catalogOptions = useMemo(
+    () =>
+      INI_OPTIONAL_SPECS.filter(
+        (spec) => !config.extra.some((item) => item.section === spec.section && item.key === spec.key)
+      ),
+    [config.extra]
+  )
+
+  const addCatalogKey = useCallback(() => {
+    if (!catalogPick) return
+    const spec = INI_OPTIONAL_SPECS.find((item) => `${item.section}\u0000${item.key}` === catalogPick)
+    if (!spec) return
+    // 三态键显式添加时默认写 1（要「不写」就把它设成「不写」或移除）
+    const value = spec.type === 'tristate' ? '1' : spec.default
+    setConfig((current) => ({ ...current, extra: [...current.extra, { section: spec.section, key: spec.key, value }] }))
+    setCatalogPick('')
+  }, [catalogPick])
 
   useEffect(() => {
     if (!game) return
@@ -342,12 +370,21 @@ export function GameDetail({ gameId, onBack, onGoLibrary }: { gameId: string; on
                 label="启用帧生成"
                 hint="关闭时代理仍然转发系统 DLL，但不会在 Ampere 上提供帧生成"
               />
-              <Toggle
-                checked={config.optimized}
-                onChange={(value) => updateConfig({ optimized: value })}
-                label="使用最优内核"
-                hint="推荐开启：已校验的最快内核集，输出与原厂逐位一致"
-              />
+              <Field
+                label="优化内核档位 Optimized"
+                hint={OPTIMIZED_TIERS.find((tier) => tier.value === normalized.optimized)?.help}
+              >
+                <Select
+                  value={normalized.optimized}
+                  onChange={(value) => updateConfig({ optimized: Number(value) })}
+                  options={OPTIMIZED_TIERS.map((tier) => ({ value: tier.value, label: tier.label }))}
+                />
+              </Field>
+              {selectedPackage?.maxMultiplier === 4 && normalized.optimized > 1 && (
+                <Alert tone="warn">
+                  当前选择的运行库最高 4X（没有有损图像内核），档位 2/3 在它上面等同于档位 1。
+                </Alert>
+              )}
               <Field label="倍率上限" hint={`当前 = ${maxMultiplierForFrames(normalized.maxGeneratedFrames)}；实际倍率由游戏请求并钳到运行库上限`}>
                 <Select
                   value={normalized.maxGeneratedFrames}
@@ -382,7 +419,7 @@ export function GameDetail({ gameId, onBack, onGoLibrary }: { gameId: string; on
                 />
               </Field>
               <Button size="sm" variant="ghost" onClick={() => setAdvanced((value) => !value)}>
-                {advanced ? '收起高级键' : '展开高级键（Runtime / 日志目录 / 自定义）'}
+                {advanced ? '收起高级键' : '展开高级键（可选键目录 / Runtime / 自定义）'}
               </Button>
               {advanced && (
                 <div className="stack">
@@ -395,41 +432,129 @@ export function GameDetail({ gameId, onBack, onGoLibrary }: { gameId: string; on
                   <Field label="内核缓存目录 Runtime.CacheDirectory" hint="留空使用 %LOCALAPPDATA%\DlssgSm86\bundles">
                     <TextInput value={normalized.cacheDirectory} onChange={(value) => updateConfig({ cacheDirectory: value })} />
                   </Field>
+
                   <div className="extra-keys">
-                    <p className="muted small">自定义键（透传上游未公开的高级键；同名键会覆盖上面的设置）</p>
-                    {config.extra.map((item, index) => (
-                      <div className="row" key={`${item.section}-${item.key}-${index}`}>
-                        <TextInput
-                          value={item.section}
-                          onChange={(value) => {
-                            const next = [...config.extra]
-                            next[index] = { ...item, section: value }
-                            updateConfig({ extra: next })
-                          }}
-                        />
-                        <TextInput
-                          value={item.key}
-                          onChange={(value) => {
-                            const next = [...config.extra]
-                            next[index] = { ...item, key: value }
-                            updateConfig({ extra: next })
-                          }}
-                        />
-                        <TextInput
-                          value={item.value}
-                          onChange={(value) => {
+                    <p className="muted small">
+                      可选高级键（上游 docs/INSTALL.md 收录的键。默认不写，缺失时上游会取安全默认值；写上会覆盖默认行为）
+                    </p>
+                    <div className="row">
+                      <Select
+                        value={catalogPick}
+                        onChange={setCatalogPick}
+                        options={[
+                          { value: '', label: '选择一个键…' },
+                          ...catalogOptions.map((spec) => ({
+                            value: `${spec.section}\u0000${spec.key}`,
+                            label: `[${spec.section}] ${spec.key} — ${spec.label}`
+                          }))
+                        ]}
+                      />
+                      <Button size="sm" disabled={!catalogPick} onClick={addCatalogKey}>
+                        添加
+                      </Button>
+                    </div>
+
+                    {config.extra.filter((item) => findSpec(item.section, item.key)).length > 0 && (
+                      <div className="catalog-rows">
+                        {config.extra.map((item, index) => {
+                          const spec = findSpec(item.section, item.key)
+                          if (!spec) return null
+                          const setValue = (value: string): void => {
                             const next = [...config.extra]
                             next[index] = { ...item, value }
                             updateConfig({ extra: next })
-                          }}
-                        />
-                        <Button size="sm" variant="ghost" onClick={() => updateConfig({ extra: config.extra.filter((_, i) => i !== index) })}>
-                          删除
-                        </Button>
+                          }
+                          return (
+                            <div className="catalog-row" key={`${item.section}-${item.key}`}>
+                              <div className="row wrap">
+                                <strong>{spec.label}</strong>
+                                <span className="mono small muted">
+                                  [{spec.section}] {spec.key}
+                                </span>
+                                {spec.risk && (
+                                  <Badge tone={spec.risk === 'experimental' ? 'bad' : 'warn'}>
+                                    {spec.risk === 'experimental' ? '实验性' : spec.risk === 'lossy' ? '有损' : '可能降性能'}
+                                  </Badge>
+                                )}
+                              </div>
+                              <p className="muted small">{spec.help}</p>
+                              <div className="row">
+                                {(spec.type === 'bool' || spec.type === 'enum' || spec.type === 'tristate') && (
+                                  <Select
+                                    value={item.value}
+                                    onChange={setValue}
+                                    options={
+                                      spec.type === 'bool'
+                                        ? [
+                                            { value: '1', label: '1 — 开启' },
+                                            { value: '0', label: '0 — 关闭' }
+                                          ]
+                                        : (spec.options ?? []).map((option) => ({ value: option.value, label: option.label }))
+                                    }
+                                  />
+                                )}
+                                {spec.type === 'int' && (
+                                  <NumberInput
+                                    value={Number(item.value) || 0}
+                                    min={spec.min}
+                                    max={spec.max}
+                                    onChange={(value) => setValue(String(value))}
+                                  />
+                                )}
+                                {spec.type === 'string' && <TextInput value={item.value} onChange={setValue} />}
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => updateConfig({ extra: config.extra.filter((_, i) => i !== index) })}
+                                >
+                                  移除
+                                </Button>
+                              </div>
+                            </div>
+                          )
+                        })}
                       </div>
-                    ))}
-                    <Button size="sm" onClick={() => updateConfig({ extra: [...config.extra, { section: 'Diagnostics', key: '', value: '' }] })}>
-                      添加键
+                    )}
+
+                    <p className="muted small" style={{ marginTop: 6 }}>
+                      自定义键（上游文档里的其它键可以自己填：段名 / 键名 / 值）
+                    </p>
+                    {config.extra
+                      .map((item, index) => ({ item, index }))
+                      .filter(({ item }) => !findSpec(item.section, item.key))
+                      .map(({ item, index }) => (
+                        <div className="row" key={`custom-${index}`}>
+                          <TextInput
+                            value={item.section}
+                            onChange={(value) => {
+                              const next = [...config.extra]
+                              next[index] = { ...item, section: value }
+                              updateConfig({ extra: next })
+                            }}
+                          />
+                          <TextInput
+                            value={item.key}
+                            onChange={(value) => {
+                              const next = [...config.extra]
+                              next[index] = { ...item, key: value }
+                              updateConfig({ extra: next })
+                            }}
+                          />
+                          <TextInput
+                            value={item.value}
+                            onChange={(value) => {
+                              const next = [...config.extra]
+                              next[index] = { ...item, value }
+                              updateConfig({ extra: next })
+                            }}
+                          />
+                          <Button size="sm" variant="ghost" onClick={() => updateConfig({ extra: config.extra.filter((_, i) => i !== index) })}>
+                            删除
+                          </Button>
+                        </div>
+                      ))}
+                    <Button size="sm" onClick={() => updateConfig({ extra: [...config.extra, { section: 'Debug', key: '', value: '' }] })}>
+                      添加自定义键
                     </Button>
                   </div>
                 </div>

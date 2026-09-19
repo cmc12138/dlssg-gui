@@ -1,6 +1,6 @@
 {
   "name": "dlssg-gui",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "DLSSG for SM86 图形化管理器：为 RTX 20/30 系显卡一键注入 DLSS 帧生成代理",
   "main": "./out/main/index.js",

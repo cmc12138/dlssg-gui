@@ -15,7 +15,7 @@ import type {
   RuntimePackage
 } from '@shared/types'
 import { KNOWN_PROXIES, RISKY_PROXIES } from '@shared/types'
-import { defaultIniConfig, iniConfigToMap, normalizeIniConfig, parseIniConfig, serializeIniConfig } from '@shared/ini-schema'
+import { defaultIniConfig, iniConfigToMap, normalizeIniConfig, optimizedTierLabel, parseIniConfig, serializeIniConfig } from '@shared/ini-schema'
 import { getGame, getPackage, listPackages, saveGame, settingsStore } from './db'
 import { backupsDir } from './paths'
 import { atomicCopyFile, atomicWriteFile, ensureDir, humanSize, pathExists, removeIfExists, sha256File } from './fsutil'
@@ -228,7 +228,11 @@ export async function planInstall(request: InstallRequest): Promise<InstallPlan>
   const present = await findKnownProxiesInDir(dir)
   const conflicting = present.filter((p) => p.toLowerCase() !== proxyName.toLowerCase())
   if (conflicting.length > 0) {
-    blockers.push(`同目录已有其它本项目代理（${conflicting.join('、')}），请先移除其中一个`)
+    // 上游 0.3.x 起：同目录多个代理不会再互相破坏（游戏先加载的那个跑 MOD，其余只转发），
+    // 所以这里只提示、不再阻塞。
+    warnings.push(
+      `同目录还有其它本项目代理（${conflicting.join('、')}）。上游说明多个代理同时存在不会出错（游戏先加载的那个生效，其余只转发），但建议只留一个，避免以后排查时混淆。`
+    )
   }
 
   const targets = [targetFileFor(dir, proxyName), join(dir, 'dlssg_sm86.ini')]
@@ -253,7 +257,7 @@ export async function planInstall(request: InstallRequest): Promise<InstallPlan>
   actions.push({
     kind: 'write-ini',
     target: targets[1],
-    detail: `写入配置：${config.enabled ? '启用' : '关闭'} / ${config.optimized ? '最优内核' : '原厂内核'} / 上限 ${config.maxGeneratedFrames + 1}X / 预设 ${config.preset} / 日志等级 ${config.logLevel}`,
+    detail: `写入配置：${config.enabled ? '启用' : '关闭'} / 档位 ${config.optimized}（${optimizedTierLabel(config.optimized)}） / 上限 ${config.maxGeneratedFrames + 1}X / 预设 ${config.preset} / 日志等级 ${config.logLevel}`,
     level: 'info'
   })
 

@@ -47,6 +47,14 @@ export interface RuntimePackage {
   /** 随包附带的出厂 ini，用来作为注释模板 */
   iniTemplatePath?: string
   notes?: string
+  /** 来自 GitHub 时记录仓库坐标，供「检查上游更新」比对 */
+  remoteRepo?: string
+  /** 仓库内目录前缀，'' = 仓库根目录 */
+  remotePath?: string
+  /** 导入时仓库内各文件的 git blob sha（路径 → sha），与远端树比对即可判断有没有更新 */
+  remoteBlobs?: Record<string, string>
+  /** 上游项目版本（如 0.3.4） */
+  projectVersion?: string
 }
 
 export type LogLevel = 0 | 1 | 2 | 3
@@ -60,7 +68,8 @@ export interface ExtraIniKey {
 /** 界面暴露的 dlssg_sm86.ini 配置项。 */
 export interface IniConfig {
   enabled: boolean
-  optimized: boolean
+  /** 一致性档位 0–3（上游 0.3.2 起；0 原厂，1 逐位一致，2/3 有损更快） */
+  optimized: number
   maxGeneratedFrames: number
   preset: 'Auto' | 'A' | 'B'
   logLevel: LogLevel
@@ -190,6 +199,11 @@ export interface AppSettings {
   keepBackups: number
   /** GitHub 下载走国内镜像加速 */
   preferMirror: boolean
+  /**
+   * 下载运行库时是否连 alternatives 里的其它代理名一起下。
+   * 默认 false：只下 version.dll（约 30MB）；全部代理约 180MB，慢线路上很痛。
+   */
+  downloadAllProxies: boolean
 }
 
 export interface GpuInfo {
@@ -300,4 +314,51 @@ export interface LogReadResult {
   lines: LogLine[]
   truncated: boolean
 }
+
+/** 上游仓库里发现的一个发布包（一个含 version.dll 的目录） */
+export interface UpstreamPackage {
+  /** 仓库内目录前缀，'' = 仓库根目录 */
+  path: string
+  label: string
+  runtimeVersion: string
+  maxMultiplier: number
+  /** 主 DLL（version.dll）的 git blob sha，用来跟本地导入的包比对 */
+  versionBlobSha: string
+  versionSize: number
+  proxies: { name: string; path: string; size: number; blobSha: string }[]
+  iniPath?: string
+  iniSize?: number
+  /** 出厂 ini 的 git blob sha */
+  iniBlobSha?: string
+  notes?: string
+  /** 本地已经导入过这个路径的运行库 */
+  localPackageId?: string
+  localPackageName?: string
+  /** 与本地导入的包相比，远端内容变了 */
+  updateAvailable: boolean
+}
+
+export interface UpstreamRelease {
+  tag: string
+  name: string
+  publishedAt: string
+  assetCount: number
+}
+
+export interface UpstreamStatus {
+  repo: string
+  repoUrl: string
+  branch: string
+  checkedAt: string
+  /** 最新提交 */
+  latestCommit: { sha: string; date: string; message: string }
+  /** 最新发行版 tag（上游用它标项目版本，比如 0.3.4） */
+  projectVersion?: string
+  releases: UpstreamRelease[]
+  packages: UpstreamPackage[]
+  /** 本地已导入运行库的上游受管情况 */
+  managedPackages: number
+  error?: string
+}
+
 

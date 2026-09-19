@@ -4,3 +4,4 @@ export const BRANCH = 'main'
 export const REPO_URL = `https://github.com/${REPO}`
 export const RAW_BASE = `https://raw.githubusercontent.com/${REPO}/${BRANCH}`
 export const MIRROR_BASE = `https://raw.gitmirror.com/${REPO}/${BRANCH}`
+export const GITHUB_API = `https://api.github.com/repos/${REPO}`

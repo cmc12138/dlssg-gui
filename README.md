@@ -37,12 +37,26 @@ DLSS-G 运行库塞进游戏进程，但它只有命令行/手工复制的用法
 | --- | --- |
 | 游戏扫描 | 自动读 Steam（`libraryfolders.vdf` + `appmanifest_*.acf`）、Epic（`.item` 清单）、GOG（注册表），也支持手动选目录 |
 | DLSS-G 探测 | 按目录里的 `nvngx_dlssg.dll` / `nvngx_dlss.dll` 判定「能不能开帧生成」，并给出候选渲染 EXE 目录 |
-| 运行库管理 | 从 GitHub 一键下载（310.9 支持 6X / 310.1 最高 4X）、导入 ZIP（GitHub 的 Download ZIP 里含多个版本会一起导入）、导入文件夹、或直接指定单个 DLL |
-| 每游戏配置 | 独立保存运行库、代理名、倍率上限、渲染预设、日志等级、Runtime 键，以及任意自定义键 |
+| **上游跟踪** | 用 GitHub API 读仓库默认分支、最近提交、发行版与整棵树，**自动发现所有含 `version.dll` 的发布包目录**（新增版本会自动出现），并用 git blob 哈希比对本地已导入的版本，标出「有更新」 |
+| 运行库管理 | 一键下载发现的发布包、导入 ZIP（GitHub 的 Download ZIP 里含多个版本会一起导入）、导入文件夹、直接指定单个 DLL |
+| 每游戏配置 | 独立保存运行库、代理名、优化档位、倍率上限、渲染预设、日志等级、Runtime 键，以及「可选键目录」里的高级键与任意自定义键 |
 | 一键注入 / 还原 | 预检查（阻塞项 / 提示）→ 写入 → 状态识别；还原支持「强制」与「保留日志」 |
 | 文件与备份 | 每个游戏按时间分目录备份，可回滚；保留份数可配置 |
 | 日志查看 | 直接读游戏目录 `dlssg_sm86\logs\*.jsonl`，汇总代理重定向 / 路由是否激活 / 错误行 |
 | 环境检测 | 读 `nvidia-smi` 拿显卡与驱动，判断 SM86 / SM75 / 40-50 系，给出驱动过旧的提醒 |
+
+### 上游是怎么跟踪的
+
+1. `GET /repos/sdli1995/dlssg_for_sm86` 拿默认分支，`/commits?per_page=1` 拿最新提交，`/releases` 拿项目版本（如 `0.3.4`），
+   `/git/trees/<branch>?recursive=1` 拿整棵文件树；
+2. 树里每个「直接含有 `version.dll`」（或 `alternatives\` 下代理）的目录就是一个发布包；`310.1` 这类目录没有自己的 ini 就回退到仓库根目录那份；
+3. 下载时记录每个文件在仓库里的 **git blob sha**（本地用 `sha1("blob <len>\0" + 内容)` 算，和远端树里的 sha 可直接比），
+   所以「有没有更新」不需要重新下载几百 MB，只比哈希；
+4. 上游换了 DLL、加了新版本目录、发了新 tag，界面都会显示出来。
+
+限制：GitHub API 未登录时每小时 60 次请求（一次检查约 4 次），结果缓存 5 分钟；触发限流时界面会提示，可以改用「导入 ZIP」。
+下载优先走 `raw.githubusercontent.com`，失败自动换镜像，再失败走 GitHub API 的 `git/blobs` 接口（会顺带校验哈希）。
+
 
 ## 快速开始（开发）
 
@@ -109,11 +123,17 @@ settings.json
 
 ## 验证情况（本机实测）
 
-- `npm run typecheck` 通过；`npm test` 12 项全通过（ini 往返、文件夹/ZIP 导入、注入→状态→改配置→拒绝还原→强制还原全流程）。
+- `npm run typecheck` 通过；`npm test` **19 项全通过**（ini 往返与档位/默认值、三态键、文件夹与 ZIP 导入、
+  注入→状态→改配置→拒绝还原→强制还原全流程、多代理不再阻塞、git blob 哈希、上游树解析）。
 - 真实环境扫描：读到 5 个 Steam 库、24 个游戏，0.5s 完成，正确识别出 5 个带 `nvngx_dlssg.dll` 的游戏
   （Call of Duty HQ / Death Stranding 2 / No Man's Sky / PRAGMATA / The Witcher 3 DX12）与 3 个只有超分的游戏。
-- 「从 GitHub 下载」实测：310.9 与 310.1 两个变体的 URL 全部 200，310.9 完整下载 6 个代理（约 110MB）→ 导入 → 哈希校验通过。
+- 上游跟踪实测（2026-09-18，上游 0.3.4）：自动发现 4 个发布包 —— 根目录（310.9，6X，主 DLL 30,011,168 字节）、
+  `310.1`（4X，27,986,208 字节）、`archive/0.1.0`、`archive/0.2.4`；`310.1` 目录没有自己的 ini，正确回退到仓库根目录那份。
+- 「下载」实测：主分支发布包 6 个文件全部下载 → 导入 → SHA-256 校验通过 → 重新比对显示「已是最新」。
 - 打包产物已在 `release\`；打包版与开发版都能正常启动并渲染界面（截图自检无控制台报错）。
+
+> 注：本机显卡是 RTX 5070 Ti，界面会提示「40/50 系原生支持、通常不需要本项目」。
+> **没有**在真实的 RTX 20/30 系显卡上跑过实际游戏的帧生成效果，那一环需要实机验证。
 
 ## 目录结构
 
@@ -135,30 +155,47 @@ docs/              截图与给测试机的使用说明
 
 ## dlssg_sm86.ini 配置项
 
-界面里暴露的是上游 0.3.0 出厂文件里的键（高级键可自行添加）：
+跟随上游 **0.3.4**（键与语义见其 `docs/INSTALL.md`）。界面里核心键是表单，其余高级/诊断键放在「可选键目录」里按需添加；
+目录里没有的键可以用「自定义键」原样透传。
+
+### 核心键（一定会写进生成的 ini）
 
 | 段 | 键 | 取值 | 说明 |
 | --- | --- | --- | --- |
 | `[General]` | `Enabled` | 0/1 | 1 启用帧生成（用内嵌运行库）；0 关掉，游戏自带 DLSS-G 原样加载 |
-| `[FrameGeneration]` | `Optimized` | 0/1 | 1 用最优内核（推荐，输出与原厂逐位一致） |
-| `[FrameGeneration]` | `MaxGeneratedFrames` | 1-5 | 上限：5 = 最高 6X，3 = 最高 4X；实际倍率由游戏请求并钳到运行库上限 |
-| `[Compatibility]` | `Preset` | Auto/A/B | 仅 310.9 版有效；UI 重组，多数游戏下 B 等于没开 |
-| `[Logging]` | `Level` | 0-3 | 0 关闭，1 仅错误，2 配置与能力，3 内核与求值轨迹 |
+| `[FrameGeneration]` | `Optimized` | **0–3** | 一致性档位。0 原厂内核不加速；**1 全部加速、与官方输出逐位一致（出厂默认）**；2 再加有损图像内核（PSNR ≳50 dB，仅 310.9）；3 全部有损最快（仅 310.9）。0.3.2 之前这项是 0/1 开关，本工具读老配置时会自动转换 |
+| `[FrameGeneration]` | `MaxGeneratedFrames` | 1–5 | **出厂默认 3（=4X）**，上游 0.3.1 起从 5 改成 3（用户反馈 6X 默认太高）；5 = 最高 6X，仅 310.9 构建 |
+| `[Compatibility]` | `Preset` | Auto/A/B | 仅 310.9 构建有效；UI 重组，多数游戏下 B 等于没开 |
+| `[Logging]` | `Level` | 0–3 | 0 关闭，1 仅错误，2 配置与能力，3 内核与求值轨迹 |
 | `[Logging]` | `Directory` | 路径 | 默认 `dlssg_sm86\logs`，相对 ini 所在目录 |
 | `[Runtime]` | `Mode` | Bundled | 常规用法保持 Bundled |
 | `[Runtime]` | `CacheDirectory` | 路径 | 留空 = `%LOCALAPPDATA%\DlssgSm86\bundles` |
 
+### 可选键目录（默认不写，缺失时上游取安全默认值）
+
+`Router`（Auto/SM86/SM75）、`SM75Family`（Repaired/Original）、`KernelImage`（Auto/PTX/Cubin/Original）、
+`SpoofArchToGame`（三态：不写=自动 / 1 / 0）、`SpoofArchValue`（Auto/Ada/Blackwell）、
+`SkipRepeatedRealCopy`、`HardwareBilinear`、`ForceGeneratedFrames`、`ForcePluginFrames`、
+`[Logging] File / DebugOutput / EvaluateEvery`、`[Debug] MarkGeneratedFrames / MarkerX / MarkerY / MarkerScale / Capture / CaptureDirectory / MfgProbe`。
+
+`Router=SM75`、`ForcePluginFrames`、`SkipRepeatedRealCopy` 等在界面上会标「实验性」；打开 `HardwareBilinear`、`Capture`、
+`MarkGeneratedFrames` 这类会降性能，界面标「可能降性能」。
+
 帧生成没生效时的排查顺序：`dlssg_sm86\logs\loader_*.jsonl` 里应有 `runtime_redirect`（代理已生效）→
 `backend_*.jsonl` 里应有 `install` 且 `route active=true`（路由已激活）。缺失通常是驱动/运行库不匹配，会回退原厂路径。
-把 `Level` 调到 2 或 3 再跑一次游戏。
+把 `Level` 调到 2 或 3 再跑一次游戏；上游 0.3.x 还有始终开启的 `fg_gate_*` 记录，能看出是哪道闸门拦住了。
 
 ## 已知限制
 
 - **只支持 Windows x64 + D3D12**，游戏必须原生支持 DLSS 帧生成。
-- 上游对 **RTX 30 系（SM86）** 是主要目标；**RTX 20 系（SM75）** 属于实验性路由，兼容性不保证。
-- 6X（Dynamic MFG）能否用取决于游戏自带插件的版本，只有 4X 插件的游戏无法被抬到 6X。
+- **RTX 20 系（Turing / SM75）**：上游 0.3.1 修好了 20 系开不了帧生成的问题，0.3.2 实测 2080 Ti 输出与 3080 Ti 逐位一致，
+  0.3.3 起会在游戏启动前改写架构闸门让游戏放出 3X/4X/6X 选项，0.3.4 修掉了该改写误伤 DLSS 超分模型导致的 30 系驱动重置。
+  出厂 ini 直接用即可（内核族按物理显卡自动选 SM75）。Turing 上的性能上游尚未测量。
+- 6X（Dynamic MFG）能否用取决于游戏自带插件的版本：自带 4X 插件的游戏无法被抬到 6X（上游试过内存补丁，跑几帧后整个帧生成会硬失败，已结论为不可用）。
+- 同一目录里放多个代理不再会互相破坏（游戏先加载的那个生效，其余只转发），但本工具只推荐留一个。
 - 装在 `Program Files` 下的游戏写入可能需要管理员权限；本软件会给出写入失败的提示，可以右键「以管理员身份运行」。
-- 本软件不修改游戏本体、不联网上传任何数据；「从 GitHub 下载」只请求上游仓库的 raw 文件。
+- 本软件不修改游戏本体、不联网上传任何数据；网络请求只有三个去处：GitHub API（查上游树）、
+  `raw.githubusercontent.com` / 镜像（下 DLL）、`nvidia-smi`（本地读显卡）。
 
 ## 许可与致谢
 

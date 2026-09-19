@@ -87,7 +87,9 @@ export async function detectEnvironment(electronVersion: string, chromeVersion: 
     if (smKind === 'ada+') {
       warnings.push(`${primary.name} 属于 RTX 40/50 系，原生就支持帧生成，通常不需要本项目`)
     } else if (smKind === 'sm75') {
-      notes.push('RTX 20 系（SM75）在上游属于实验性路由，兼容性不如 RTX 30 系（SM86），如有异常请以 30 系实测为准')
+      notes.push(
+        'RTX 20 系（Turing / SM75）：上游 0.3.1 起已修复，出厂 ini 直接用即可，内核族会按物理显卡自动选到 SM75；0.3.3 起还会在游戏启动前改写架构闸门，让游戏放出 3X/4X/6X 选项。真机实测输出与 3080 Ti 逐位一致，但 Turing 上的性能上游尚未测量。'
+      )
     } else if (smKind === 'unknown') {
       notes.push(`无法从「${primary.name}」判断架构，请确认是 RTX 20/30 系（其它架构不保证可用）`)
     }

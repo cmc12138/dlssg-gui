@@ -840,6 +840,26 @@ body {
   padding: 12px;
 }
 
+.catalog-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.catalog-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.catalog-row p {
+  margin: 0;
+}
+
 details summary {
   cursor: pointer;
 }

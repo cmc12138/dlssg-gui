@@ -14,6 +14,7 @@ const { applyInstall, getGameStatus, planInstall, restoreGame, updateIniOnly } =
 const { getPackage, listPackages, saveGame, listGames } = await import('../src/main/db')
 const { findCandidates } = await import('../src/main/scan')
 const { ensureDataDirs } = await import('../src/main/paths')
+const { gitBlobSha, packagesFromTree } = await import('../src/main/upstream')
 
 import type { GameEntry } from '../src/shared/types'
 
@@ -68,7 +69,7 @@ function gameEntry(id: string, exeDir: string): GameEntry {
 describe('ini 读写', () => {
   it('序列化后再解析回来保持一致', () => {
     const config = normalizeIniConfig(
-      { ...defaultIniConfig(), maxGeneratedFrames: 3, preset: 'B', logLevel: 2, optimized: false, enabled: true },
+      { ...defaultIniConfig(), maxGeneratedFrames: 3, preset: 'B', logLevel: 2, optimized: 0, enabled: true },
       6
     )
     const text = serializeIniConfig(config, { runtimeMaxMultiplier: 6, runtimeVersion: '310.9' })
@@ -79,10 +80,47 @@ describe('ini 读写', () => {
     assert.match(text, /Level=2/)
     const parsed = parseIniConfig(text)
     assert.equal(parsed.enabled, true)
-    assert.equal(parsed.optimized, false)
+    assert.equal(parsed.optimized, 0)
     assert.equal(parsed.maxGeneratedFrames, 3)
     assert.equal(parsed.preset, 'B')
     assert.equal(parsed.logLevel, 2)
+  })
+
+  it('出厂默认是档位 1 与 4X（上游 0.3.1 起）', () => {
+    const config = defaultIniConfig()
+    assert.equal(config.optimized, 1)
+    assert.equal(config.maxGeneratedFrames, 3)
+  })
+
+  it('档位 2 / 3 能写进去也能读回来', () => {
+    for (const tier of [2, 3]) {
+      const text = serializeIniConfig(normalizeIniConfig({ ...defaultIniConfig(), optimized: tier }, 6), { runtimeMaxMultiplier: 6 })
+      assert.match(text, new RegExp(`Optimized=${tier}`))
+      assert.equal(parseIniConfig(text).optimized, tier)
+    }
+  })
+
+  it('兼容 0.3.2 之前的布尔写法与 310.1 的档位上限', () => {
+    assert.equal(parseIniConfig('[FrameGeneration]\nOptimized=1\n').optimized, 1)
+    assert.equal(parseIniConfig('[Compatibility]\nOptimizedKernels=1\n').optimized, 1)
+    // 310.1 构建没有有损图像内核，档位被钳到 1
+    assert.equal(normalizeIniConfig({ ...defaultIniConfig(), optimized: 3 }, 4, false).optimized, 1)
+  })
+
+  it('三态键留空时不写进文件', () => {
+    const config = normalizeIniConfig(
+      {
+        ...defaultIniConfig(),
+        extra: [
+          { section: 'Compatibility', key: 'SpoofArchToGame', value: '' },
+          { section: 'Compatibility', key: 'Router', value: 'SM75' }
+        ]
+      },
+      6
+    )
+    const text = serializeIniConfig(config)
+    assert.doesNotMatch(text, /SpoofArchToGame/)
+    assert.match(text, /Router=SM75/)
   })
 
   it('倍率会被运行库上限钳制', () => {
@@ -197,13 +235,25 @@ describe('注入与还原', () => {
 
   it('只同步配置会更新 ini 与记录', async () => {
     const game = (await listGames()).find((item) => item.id === gameId)!
-    const result = await updateIniOnly(gameId, { ...game.config, optimized: false, maxGeneratedFrames: 3 })
+    const result = await updateIniOnly(gameId, { ...game.config, optimized: 2, maxGeneratedFrames: 3 })
     assert.equal(result.ok, true, result.message)
-    assert.match(readFileSync(join(exeDir, 'dlssg_sm86.ini'), 'utf8'), /Optimized=0/)
+    assert.match(readFileSync(join(exeDir, 'dlssg_sm86.ini'), 'utf8'), /Optimized=2/)
     const after = (await listGames()).find((item) => item.id === gameId)!
-    assert.equal(after.install?.config.optimized, false)
+    assert.equal(after.install?.config.optimized, 2)
     const status = await getGameStatus(after)
     assert.equal(status.state, 'installed', status.message)
+  })
+
+  it('同目录有别的代理只提示、不再阻塞（上游 0.3.x 行为）', async () => {
+    writeFileSync(join(exeDir, 'winmm.dll'), fakePe(7, 2048))
+    const game = (await listGames()).find((item) => item.id === gameId)!
+    const plan = await planInstall({ gameId, packageId, proxyName: 'version.dll', config: game.config })
+    assert.deepEqual(plan.blockers, [])
+    assert.ok(
+      plan.warnings.some((item) => item.includes('winmm.dll')),
+      '应该提示目录里还有其它代理'
+    )
+    rmSync(join(exeDir, 'winmm.dll'), { force: true })
   })
 
   it('文件被改动后拒绝还原，强制可以还原', async () => {
@@ -228,5 +278,58 @@ describe('游戏目录探测', () => {
     assert.equal(candidates[0].hasDlssg, true)
     assert.equal(candidates[0].dir, exeDir)
     assert.equal(candidates[0].exeName, 'Game.exe')
+  })
+})
+
+describe('上游发现', () => {
+  it('gitBlobSha 与 git 的 blob 哈希一致', () => {
+    assert.equal(gitBlobSha(Buffer.from('hello\n')), 'ce013625030ba8dba906f756967f9e9ca394464a')
+  })
+
+  it('能从仓库树里找出所有发布包并推断版本与代理', () => {
+    const blob = (path: string, size: number): { path: string; type: 'blob'; size: number; sha: string } => ({
+      path,
+      type: 'blob',
+      size,
+      sha: `sha-${path}`
+    })
+    const tree = [
+      blob('version.dll', 30_011_168),
+      blob('dlssg_sm86.ini', 3166),
+      blob('README.md', 7293),
+      blob('alternatives/winmm.dll', 30_022_432),
+      blob('alternatives/d3d12.dll', 30_011_168),
+      blob('alternatives/README.md', 2351),
+      blob('310.1/version.dll', 27_986_208),
+      blob('310.1/alternatives/winmm.dll', 27_997_472),
+      blob('archive/0.2.4/version.dll', 15_667_520),
+      blob('archive/0.2.4/altnative/winmm.dll', 15_678_272),
+      blob('archive/0.2.4/dlssg_sm86.ini', 581)
+    ]
+
+    const packages = packagesFromTree(tree, '0.3.4')
+    assert.deepEqual(
+      packages.map((item) => item.path),
+      ['', '310.1', 'archive/0.2.4']
+    )
+
+    const root = packages[0]
+    assert.equal(root.runtimeVersion, '310.9')
+    assert.equal(root.maxMultiplier, 6)
+    assert.equal(root.versionSize, 30_011_168)
+    assert.equal(root.proxies.length, 3)
+    assert.equal(root.iniPath, 'dlssg_sm86.ini')
+    assert.match(root.label, /0\.3\.4/)
+
+    const legacy = packages[1]
+    assert.equal(legacy.runtimeVersion, '310.1')
+    assert.equal(legacy.maxMultiplier, 4)
+    // 310.1 目录里没有 ini，回退到仓库根目录那份
+    assert.equal(legacy.iniPath, 'dlssg_sm86.ini')
+
+    const archived = packages[2]
+    assert.equal(archived.runtimeVersion, '0.2.4')
+    assert.equal(archived.proxies.length, 2)
+    assert.equal(archived.iniPath, 'archive/0.2.4/dlssg_sm86.ini')
   })
 })

@@ -7,7 +7,8 @@ import { defaultIniConfig, normalizeIniConfig } from '@shared/ini-schema'
 import { deleteGame, getGame, listGames, listPackages, saveGame, settingsStore } from './db'
 import { applyInstall, getGameStatus, listBackups, planInstall, restoreGame, runningProcesses, updateIniOnly } from './inject'
 import { deletePackage, downloadVariant, importFromFolder, importFromZip, importSingleDll, verifyPackage } from './library'
-import { invalidateRemoteCache, listRemoteVariants, REMOTE_VARIANTS } from './remote-variants'
+import { getSeed, invalidateRemoteCache, listRemoteVariants } from './remote-variants'
+import { checkUpstream } from './upstream'
 import { listGameLogs, readLogFile } from './logs'
 import { detectGameFolder, gameKey, scanLibraries } from './scan'
 import { detectEnvironment } from './env'
@@ -90,13 +91,22 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       throw serializeError(error)
     }
   })
-  ipcMain.handle(IPC.packagesRemote, () => listRemoteVariants(true))
+  ipcMain.handle(IPC.packagesRemote, () => listRemoteVariants())
   ipcMain.handle(IPC.packagesDownload, async (_event, id: string) => {
     const settings = await settingsStore.read()
-    const seed = REMOTE_VARIANTS.find((variant) => variant.id === id)
-    if (!seed) throw new Error(`未知的下载项：${id}`)
+    let seed = getSeed(id)
+    if (!seed) {
+      // 动态发现的种子要先跑一次「列出可下载项」才会注册进来
+      await listRemoteVariants().catch(() => undefined)
+      seed = getSeed(id)
+    }
+    if (!seed) throw new Error(`未知的下载项：${id}（上游结构可能变了，请刷新下载列表）`)
     try {
-      return await downloadVariant(seed, { onProgress, preferMirror: settings.preferMirror })
+      return await downloadVariant(seed, {
+        onProgress,
+        preferMirror: settings.preferMirror,
+        includeAlternatives: settings.downloadAllProxies
+      })
     } catch (error) {
       invalidateRemoteCache()
       throw serializeError(error)
@@ -108,6 +118,13 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   ipcMain.handle(IPC.packagesVerify, async (_event, id: string) => {
     try {
       return await verifyPackage(id, onProgress)
+    } catch (error) {
+      throw serializeError(error)
+    }
+  })
+  ipcMain.handle(IPC.upstreamCheck, async (_event, force?: boolean) => {
+    try {
+      return await checkUpstream({ force: force ?? false })
     } catch (error) {
       throw serializeError(error)
     }

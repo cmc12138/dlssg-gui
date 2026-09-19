@@ -57,15 +57,28 @@ function createWindow(): void {
     void mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
 
-  // 自检开关：DLSSG_GUI_SCREENSHOT=<png 路径> 时，加载完成后截图并退出（用于验证界面能正常渲染）
+  // 自检开关：DLSSG_GUI_SCREENSHOT=<png 路径> 时，加载完成后截图并退出（用于验证界面能正常渲染）。
+  // 可选 DLSSG_GUI_SCREENSHOT_ROUTE=<侧边栏文字>，先切到对应页面再截图。
   const screenshotPath = process.env.DLSSG_GUI_SCREENSHOT
   if (screenshotPath) {
     mainWindow.webContents.once('did-finish-load', () => {
       setTimeout(() => {
         const window = mainWindow
         if (!window) return
-        void window.webContents
-          .capturePage()
+        const route = process.env.DLSSG_GUI_SCREENSHOT_ROUTE
+        const clickRoute = route
+          ? window.webContents.executeJavaScript(
+              `(() => {
+                 const items = Array.from(document.querySelectorAll('.nav-item'))
+                 const target = items.find((el) => el.textContent && el.textContent.includes(${JSON.stringify(route)}))
+                 if (target) target.click()
+                 return Boolean(target)
+               })()`
+            )
+          : Promise.resolve(false)
+        void clickRoute
+          .then(() => new Promise((resolve) => setTimeout(resolve, route ? 4000 : 0)))
+          .then(() => window.webContents.capturePage())
           .then((image) => writeFile(screenshotPath, image.toPNG()))
           .catch(() => undefined)
           .finally(() => app.quit())

@@ -75,7 +75,7 @@ export function Dashboard({ onGoGames, onGoLibrary, onOpenGame }: { onGoGames: (
               <span className="muted small">架构判断</span>
               <span>
                 {env.smKind === 'sm86' && <Badge tone="ok">SM86（RTX 30 系，官方支持）</Badge>}
-                {env.smKind === 'sm75' && <Badge tone="warn">SM75（RTX 20 系，实验性）</Badge>}
+                {env.smKind === 'sm75' && <Badge tone="info">SM75（RTX 20 系，出厂配置即可用）</Badge>}
                 {env.smKind === 'ada+' && <Badge tone="info">RTX 40/50 系（原生支持，一般不需要）</Badge>}
                 {env.smKind === 'unknown' && <Badge tone="muted">未知</Badge>}
               </span>
@@ -108,7 +108,7 @@ export function Dashboard({ onGoGames, onGoLibrary, onOpenGame }: { onGoGames: (
         <Card title="快速开始" subtitle="四步跑起来">
           <ol className="list ordered">
             <li>
-              在「运行库」里下载或导入 DLSSG 发布包（推荐 310.9，最高 6X）
+              在「运行库」里看「上游状态」，下载最新发布包（主分支 = 310.9 运行库，最高 6X；仓库里的 310.1 目录最高 4X）
               <div className="row" style={{ marginTop: 6 }}>
                 <Button size="sm" onClick={onGoLibrary}>
                   去运行库
@@ -117,7 +117,7 @@ export function Dashboard({ onGoGames, onGoLibrary, onOpenGame }: { onGoGames: (
             </li>
             <li>扫描或手动添加游戏，确认「渲染 EXE 目录」正确</li>
             <li>在游戏详情里选代理 DLL，点「开始注入」</li>
-            <li>启动游戏 → 图形设置里打开 DLSS 帧生成 → 选倍率</li>
+            <li>启动游戏 → 图形设置里打开 DLSS 帧生成 → 选倍率（出厂上限是 4X，要 6X 得把倍率上限改成 5）</li>
           </ol>
         </Card>
 
@@ -165,8 +165,11 @@ export function Dashboard({ onGoGames, onGoLibrary, onOpenGame }: { onGoGames: (
       <Card title="关于上游">
         <div className="stack">
           <p className="small">
-            运行库来自开源项目 <span className="mono">sdli1995/dlssg_for_sm86</span>（GPLv3）：在 RTX 30 系（SM86）上启用 NVIDIA DLSS 帧生成，
-            RTX 20 系（SM75）路由为实验性。内嵌的 <span className="mono">nvngx_dlssg.dll</span>、模型与内核来自 NVIDIA，不随源码转授权。
+            运行库来自开源项目 <span className="mono">sdli1995/dlssg_for_sm86</span>（GPLv3）：在 RTX 30 系（SM86）与 RTX 20 系（Turing / SM75）上启用
+            NVIDIA DLSS 帧生成。内嵌的 <span className="mono">nvngx_dlssg.dll</span>、模型与内核来自 NVIDIA，不随源码转授权，也不随本工具分发。
+          </p>
+          <p className="muted small">
+            「上游状态」用 GitHub API 读仓库，自动发现所有发布包目录；只要上游新增版本目录或替换了 DLL，这里就会显示「有更新」。
           </p>
           <div className="row">
             <Button size="sm" onClick={() => void window.api.openExternal('https://github.com/sdli1995/dlssg_for_sm86')}>

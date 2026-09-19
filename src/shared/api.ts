@@ -14,6 +14,7 @@ import type {
   RemoteVariant,
   RuntimePackage,
   ScannedGame,
+  UpstreamStatus,
   VerifyResult,
   DetectedExe
 } from './types'
@@ -60,6 +61,7 @@ export interface DshApi {
   downloadVariant(id: string): Promise<RuntimePackage>
   removePackage(id: string): Promise<void>
   verifyPackage(id: string): Promise<VerifyResult[]>
+  checkUpstream(force?: boolean): Promise<UpstreamStatus>
 
   listGames(): Promise<GameEntry[]>
   scanGames(): Promise<ScanResponse>
@@ -98,6 +100,7 @@ export const IPC = {
   packagesDownload: 'packages:download',
   packagesRemove: 'packages:remove',
   packagesVerify: 'packages:verify',
+  upstreamCheck: 'upstream:check',
   gamesList: 'games:list',
   gamesScan: 'games:scan',
   gamesAdd: 'games:add',
