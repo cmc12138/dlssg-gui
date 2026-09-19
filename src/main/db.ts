@@ -7,7 +7,8 @@ export const settingsStore = new JsonStore<AppSettings>(settingsFile, () => ({
   confirmBeforeInstall: true,
   keepBackups: 3,
   preferMirror: true,
-  downloadAllProxies: false
+  downloadAllProxies: false,
+  autoReplacePackages: true
 }))
 
 export interface GamesFile {

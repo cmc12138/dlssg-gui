@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type JSX } from 'react'
-import type { RemoteVariant, RuntimePackage, UpstreamStatus } from '@shared/types'
+import type { CleanupReport, RemoteVariant, RuntimePackage, UpstreamStatus } from '@shared/types'
 import { Alert, Badge, Button, Card, EmptyState, Modal, Spinner, Toggle } from '../components/ui'
 import { useApp } from '../state'
 import { formatTime, humanSize } from '../lib/format'
@@ -14,6 +14,22 @@ export function Library(): JSX.Element {
   const [targetName, setTargetName] = useState('version.dll')
   const [upstream, setUpstream] = useState<UpstreamStatus>()
   const [upstreamBusy, setUpstreamBusy] = useState(false)
+  const [cleanup, setCleanup] = useState<CleanupReport>()
+  const [cleanupBusy, setCleanupBusy] = useState(false)
+  const [cleanupPick, setCleanupPick] = useState<string[]>([])
+
+  const scanCleanupNow = useCallback(async (): Promise<void> => {
+    setCleanupBusy(true)
+    try {
+      const report = await window.api.scanCleanup()
+      setCleanup(report)
+      setCleanupPick(report.items.map((item) => item.path))
+    } catch (error) {
+      app.notify(`检查失败：${(error as Error).message}`, 'bad')
+    } finally {
+      setCleanupBusy(false)
+    }
+  }, [app])
 
   const checkUpstreamNow = useCallback(
     async (force: boolean): Promise<void> => {
@@ -28,6 +44,25 @@ export function Library(): JSX.Element {
     },
     [app]
   )
+
+  const runCleanupNow = useCallback(async (): Promise<void> => {
+    if (cleanupPick.length === 0) return
+    setCleanupBusy(true)
+    try {
+      const result = await window.api.runCleanup(cleanupPick)
+      app.notify(
+        `清理完成：删除 ${result.removed} 项，释放 ${result.freedText}${result.errors.length > 0 ? `\n${result.errors.join('\n')}` : ''}`,
+        result.errors.length > 0 ? 'info' : 'ok'
+      )
+      await app.refreshPackages()
+      await checkUpstreamNow(true)
+      await scanCleanupNow()
+    } catch (error) {
+      app.notify(`清理失败：${(error as Error).message}`, 'bad')
+    } finally {
+      setCleanupBusy(false)
+    }
+  }, [app, checkUpstreamNow, cleanupPick, scanCleanupNow])
 
   useEffect(() => {
     void checkUpstreamNow(false)
@@ -465,6 +500,76 @@ export function Library(): JSX.Element {
           </tbody>
         </table>
       </Modal>
+
+      <Card
+        title="数据目录清理"
+        subtitle="只清理本工具自己的数据目录（%APPDATA%\dlssg-gui）；游戏目录一律不碰"
+        actions={
+          <div className="row">
+            <Button size="sm" onClick={() => void scanCleanupNow()} disabled={cleanupBusy}>
+              {cleanupBusy ? '处理中…' : '检查可清理项'}
+            </Button>
+            {cleanup && cleanup.items.length > 0 && (
+              <Button size="sm" variant="primary" onClick={() => void runCleanupNow()} disabled={cleanupBusy || cleanupPick.length === 0}>
+                清理选中 {cleanupPick.length} 项
+              </Button>
+            )}
+          </div>
+        }
+      >
+        {!cleanup ? (
+          <p className="muted small">
+            旧版本的运行库、导入中断留下的孤立目录、当前注入记录已经不引用的旧备份、下载临时目录，都可以一键清掉。
+          </p>
+        ) : cleanup.items.length === 0 ? (
+          <Alert tone="ok" title="没有可清理的东西">
+            数据目录很干净：{cleanup.dataDir}
+          </Alert>
+        ) : (
+          <div className="stack">
+            <p className="muted small">
+              共 {cleanup.items.length} 项，合计 {humanSize(cleanup.totalSize)}。取消勾选可以保留；运行库目录：
+              <span className="mono">{cleanup.packagesDir}</span>
+            </p>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th style={{ width: 36 }} />
+                  <th>内容</th>
+                  <th>大小</th>
+                  <th>为什么可以删</th>
+                </tr>
+              </thead>
+              <tbody>
+                {cleanup.items.map((item) => (
+                  <tr key={item.path}>
+                    <td>
+                      <input
+                        type="checkbox"
+                        checked={cleanupPick.includes(item.path)}
+                        onChange={(event) =>
+                          setCleanupPick((current) =>
+                            event.target.checked ? [...current, item.path] : current.filter((path) => path !== item.path)
+                          )
+                        }
+                      />
+                    </td>
+                    <td>
+                      <div className="small">{item.label ?? item.kind}</div>
+                      <div className="muted small mono">{item.path}</div>
+                    </td>
+                    <td className="small">{humanSize(item.size)}</td>
+                    <td className="muted small">{item.reason}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="muted small">
+              有游戏正在用的运行库不会被列出来；备份目录里当前注入记录引用的那一份也不会删（还原要用它）。
+            </p>
+          </div>
+        )}
+      </Card>
     </div>
   )
 }

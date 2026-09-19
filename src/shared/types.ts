@@ -251,6 +251,31 @@ export interface MergeResult {
   details: string[]
 }
 
+/** 可清理项（只针对本工具自己的数据目录，游戏目录不碰） */
+export interface CleanupItem {
+  kind: 'orphan' | 'superseded' | 'unused' | 'excess-backup' | 'temp'
+  path: string
+  size: number
+  reason: string
+  packageId?: string
+  label?: string
+}
+
+export interface CleanupReport {
+  items: CleanupItem[]
+  totalSize: number
+  dataDir: string
+  packagesDir: string
+  backupsDir: string
+}
+
+export interface CleanupRunResult {
+  removed: number
+  freed: number
+  freedText: string
+  errors: string[]
+}
+
 export interface AppSettings {
   /** 默认使用的运行库包 */
   defaultPackageId?: string
@@ -266,6 +291,8 @@ export interface AppSettings {
    * 默认 false：只下 version.dll（约 30MB）；全部代理约 180MB，慢线路上很痛。
    */
   downloadAllProxies: boolean
+  /** 更新/重新导入运行库后，自动删掉同来源的旧版本（有游戏还在用就保留）。默认开 */
+  autoReplacePackages: boolean
 }
 
 export interface GpuInfo {

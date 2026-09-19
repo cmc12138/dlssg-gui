@@ -82,6 +82,12 @@ export function Settings(): JSX.Element {
             label="优先使用镜像加速"
             hint="先试 raw.gitmirror.com（这个域名在你所在网络不一定能解析），失败自动回退官方地址；两条直链都失败时还有 GitHub API 兜底通道"
           />
+          <Toggle
+            checked={settings.autoReplacePackages}
+            onChange={(value) => void app.updateSettings({ autoReplacePackages: value })}
+            label="更新运行库后自动删除同来源的旧版本"
+            hint="开着的话，重新下载/重新导入同一个来源的包时，旧的那份会直接从数据目录删掉（有游戏正在用就保留）。关掉就会一直留着，可以在「运行库」页用「检查可清理项」手动清"
+          />
           <p className="muted small">
             下载体积参考：上游 0.3.4 的主分支发布包，version.dll 约 28.6MB，每个备选代理也是这个量级，出厂 ini 只有几 KB。
           </p>

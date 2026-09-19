@@ -17,6 +17,8 @@ const { ensureDataDirs } = await import('../src/main/paths')
 const { gitBlobSha, packagesFromTree } = await import('../src/main/upstream')
 const { sameGame, findExactDuplicateGroups, findDuplicateGroups, listDuplicateGames, mergeDuplicateGames } = await import('../src/main/games')
 const { getRefStatus, installReframework, uninstallReframework } = await import('../src/main/reframework')
+const { scanCleanup, runCleanup, removeSupersededPackages, packageGroupKey } = await import('../src/main/cleanup')
+const { packagesDir } = await import('../src/main/paths')
 const AdmZipCtor = (await import('adm-zip')).default
 
 import type { GameEntry } from '../src/shared/types'
@@ -377,6 +379,93 @@ describe('下载进度', () => {
     )
     assert.equal(events[events.length - 1].finished, true, '最后一个事件应带结束标记')
     assert.equal(statSync(dest).size, total, '文件应该完整落盘')
+  })
+})
+
+describe('数据目录清理', () => {
+  it('找出孤立目录与被取代的旧包，但不碰有游戏在用的包', async () => {
+    ensureDataDirs()
+    // 造两个同名的包：先 A 再 B（内容不同 → 不同 id）
+    const release = join(workRoot, 'cleanup-release')
+    makeRelease(release)
+    const pkgA = (await importFromFolder(release)).packages[0]
+    writeFileSync(join(release, 'version.dll'), fakePe(99, 4096))
+    const pkgB = (await importFromFolder(release)).packages[0]
+    assert.notEqual(pkgA.id, pkgB.id, '内容不同应该是两个包')
+    assert.equal(packageGroupKey(pkgA), packageGroupKey(pkgB), '同来源应该分到同一组')
+
+    // 孤立目录（有文件夹但没登记）
+    const orphan = join(packagesDir(), 'orphan-folder')
+    mkdirSync(orphan, { recursive: true })
+    writeFileSync(join(orphan, 'leftover.dll'), Buffer.alloc(2048, 3))
+
+    const report = await scanCleanup()
+    const superseded = report.items.find((item) => item.kind === 'superseded' && item.packageId === pkgA.id)
+    assert.ok(superseded, '旧的那个包应该被列出来')
+    assert.ok(
+      report.items.some((item) => item.kind === 'orphan' && item.path === orphan),
+      '孤立目录应该被列出来'
+    )
+    assert.ok(!report.items.some((item) => item.packageId === pkgB.id), '最新的包不该被列出来')
+    assert.ok(report.totalSize > 0)
+
+    // 让一个游戏用上旧的包 → 就不该再列出来了
+    const now = new Date().toISOString()
+    const gameDir = join(workRoot, 'cleanup-game')
+    mkdirSync(gameDir, { recursive: true })
+    await saveGame({
+      ...gameEntry('cleanup-game', gameDir),
+      install: {
+        installedAt: now,
+        packageId: pkgA.id,
+        packageName: pkgA.name,
+        runtimeVersion: '310.9',
+        proxyName: 'version.dll',
+        backupDir: join(workRoot, 'fake-backup'),
+        files: [],
+        config: defaultIniConfig(),
+        appVersion: 'test'
+      }
+    })
+    const second = await scanCleanup()
+    assert.ok(
+      !second.items.some((item) => item.packageId === pkgA.id),
+      '有游戏在用的包不能被列进清理清单'
+    )
+    assert.ok(second.items.some((item) => item.kind === 'orphan' && item.path === orphan))
+
+    // 执行清理：只删清单里的
+    const result = await runCleanup(second.items.map((item) => item.path))
+    assert.ok(result.removed >= 1)
+    assert.equal(existsSync(orphan), false, '孤立目录应该被删掉')
+    assert.ok(existsSync(pkgA.rootPath), '正在用的包必须还在')
+    assert.ok((await listPackages()).some((pkg) => pkg.id === pkgA.id))
+  })
+
+  it('更新时自动替换：删掉同来源的旧包，有游戏在用就保留', async () => {
+    // 用不同的版本目录，避免和上一个用例的包名混在同一组
+    const base = join(workRoot, 'cleanup-release2')
+    const release = join(base, '310.7')
+    makeRelease(release)
+    const oldPkg = (await importFromFolder(base)).packages[0]
+    writeFileSync(join(release, 'version.dll'), fakePe(123, 4096))
+    const newPkg = (await importFromFolder(base)).packages[0]
+    assert.notEqual(oldPkg.id, newPkg.id)
+
+    const removed = await removeSupersededPackages(newPkg)
+    assert.deepEqual(removed, [oldPkg.name], `应该删掉旧包，实际 ${JSON.stringify(removed)}`)
+    assert.ok(!(await listPackages()).some((pkg) => pkg.id === oldPkg.id), '旧包记录也要没了')
+
+    // 有游戏在用时不删
+    const third = (await importFromFolder(base)).packages[0]
+    writeFileSync(join(release, 'version.dll'), fakePe(200, 4096))
+    const fourth = (await importFromFolder(base)).packages[0]
+    const game = (await listGames()).find((item) => item.id === 'cleanup-game')!
+    game.install = { ...game.install!, packageId: third.id }
+    await saveGame(game)
+    const kept = await removeSupersededPackages(fourth)
+    assert.deepEqual(kept, [], '有游戏在用的包不能被自动删掉')
+    assert.ok((await listPackages()).some((pkg) => pkg.id === third.id))
   })
 })
 

@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import { app, BrowserWindow, dialog, ipcMain, shell, type OpenDialogOptions, type OpenDialogReturnValue } from 'electron'
 import { basename, dirname, join } from 'node:path'
 import { IPC, type DetectResponse, type InstallRequestPayload, type ScanResponse } from '@shared/api'
-import type { AppSettings, GameEntry, IniConfig, ProgressEvent } from '@shared/types'
+import type { AppSettings, GameEntry, ImportResult, IniConfig, ProgressEvent } from '@shared/types'
 import { defaultIniConfig, normalizeIniConfig } from '@shared/ini-schema'
 import { deleteGame, getGame, listGames, listPackages, saveGame, settingsStore } from './db'
 import { applyInstall, getGameStatus, listBackups, planInstall, restoreGame, runningProcesses, updateIniOnly } from './inject'
@@ -13,6 +13,7 @@ import { listGameLogs, readLogFile } from './logs'
 import { detectGameFolder, gameKey, scanLibraries } from './scan'
 import { listDuplicateGames, mergeDuplicateGames, sameGame } from './games'
 import { fetchLatestRefRelease, getRefStatus, installReframework, uninstallReframework } from './reframework'
+import { removeSupersededPackages, runCleanup, scanCleanup } from './cleanup'
 import { detectEnvironment } from './env'
 import { backupsDir } from './paths'
 import { removeIfExists } from './fsutil'
@@ -43,6 +44,16 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     const window = getWindow()
     return window && !window.isDestroyed() ? dialog.showOpenDialog(window, options) : dialog.showOpenDialog(options)
   }
+  /** 导入/下载之后，把同来源的旧版本顺手清掉（有游戏还在用就保留） */
+  const replaceSuperseded = async (result: ImportResult | null): Promise<ImportResult | null> => {
+    if (!result || result.packages.length === 0) return result
+    const notes: string[] = []
+    for (const pkg of result.packages) {
+      const removed = await removeSupersededPackages(pkg).catch(() => [] as string[])
+      if (removed.length > 0) notes.push(`已移除同来源的旧版本：${removed.join('、')}`)
+    }
+    return notes.length > 0 ? { ...result, warnings: [...result.warnings, ...notes] } : result
+  }
 
   ipcMain.handle(IPC.env, async () => {
     const info = await detectEnvironment(process.versions.electron, process.versions.chrome)
@@ -65,7 +76,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     })
     if (result.canceled || result.filePaths.length === 0) return null
     try {
-      return await importFromFolder(result.filePaths[0], onProgress)
+      return await replaceSuperseded(await importFromFolder(result.filePaths[0], onProgress))
     } catch (error) {
       throw serializeError(error)
     }
@@ -78,7 +89,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     })
     if (result.canceled || result.filePaths.length === 0) return null
     try {
-      return await importFromZip(result.filePaths[0], onProgress)
+      return await replaceSuperseded(await importFromZip(result.filePaths[0], onProgress))
     } catch (error) {
       throw serializeError(error)
     }
@@ -86,9 +97,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   ipcMain.handle(IPC.packagesImportPath, async (_event, path: string, targetName?: string) => {
     try {
       const lower = path.toLowerCase()
-      if (lower.endsWith('.zip')) return await importFromZip(path, onProgress)
-      if (lower.endsWith('.dll')) return await importSingleDll(path, targetName ?? 'version.dll')
-      return await importFromFolder(path, onProgress)
+      if (lower.endsWith('.zip')) return await replaceSuperseded(await importFromZip(path, onProgress))
+      if (lower.endsWith('.dll')) return await replaceSuperseded(await importSingleDll(path, targetName ?? 'version.dll'))
+      return await replaceSuperseded(await importFromFolder(path, onProgress))
     } catch (error) {
       throw serializeError(error)
     }
@@ -104,13 +115,30 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     }
     if (!seed) throw new Error(`未知的下载项：${id}（上游结构可能变了，请刷新下载列表）`)
     try {
-      return await downloadVariant(seed, {
+      const pkg = await downloadVariant(seed, {
         onProgress,
         preferMirror: settings.preferMirror,
         includeAlternatives: settings.downloadAllProxies
       })
+      // 更新完把同来源的旧版本删掉，避免 packages 目录越堆越多
+      await removeSupersededPackages(pkg).catch(() => [] as string[])
+      return pkg
     } catch (error) {
       invalidateRemoteCache()
+      throw serializeError(error)
+    }
+  })
+  ipcMain.handle(IPC.cleanupScan, async () => {
+    try {
+      return await scanCleanup()
+    } catch (error) {
+      throw serializeError(error)
+    }
+  })
+  ipcMain.handle(IPC.cleanupRun, async (_event, paths: string[]) => {
+    try {
+      return await runCleanup(paths ?? [])
+    } catch (error) {
       throw serializeError(error)
     }
   })

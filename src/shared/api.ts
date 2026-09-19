@@ -21,6 +21,8 @@ import type {
   MergeResult,
   RefReleaseInfo,
   RefStatus,
+  CleanupReport,
+  CleanupRunResult,
   DetectedExe
 } from './types'
 
@@ -74,6 +76,8 @@ export interface DshApi {
   removePackage(id: string): Promise<void>
   verifyPackage(id: string): Promise<VerifyResult[]>
   checkUpstream(force?: boolean): Promise<UpstreamStatus>
+  scanCleanup(): Promise<CleanupReport>
+  runCleanup(paths: string[]): Promise<CleanupRunResult>
 
   listGames(): Promise<GameEntry[]>
   scanGames(): Promise<ScanResponse>
@@ -119,6 +123,8 @@ export const IPC = {
   packagesRemove: 'packages:remove',
   packagesVerify: 'packages:verify',
   upstreamCheck: 'upstream:check',
+  cleanupScan: 'cleanup:scan',
+  cleanupRun: 'cleanup:run',
   gamesList: 'games:list',
   gamesScan: 'games:scan',
   gamesAdd: 'games:add',
