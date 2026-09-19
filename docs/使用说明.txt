@@ -36,10 +36,33 @@ DLSSG GUI —— 给 RTX 20/30 系显卡开 DLSS 帧生成的图形化工具
   或者代理 DLL 没被加载——去「日志」页看有没有 runtime_redirect，或者换个代理名
   （version.dll 不行就试 winmm.dll）。
 
+卡普空游戏（RE Engine）要特别注意
+---------------------------------
+Pragmata、生化危机安魂曲、龙之信条 2、怪物猎人荒野这类新卡普空游戏，会拒绝加载游戏
+目录里它不认识的 DLL——只放 version.dll 会“直接崩在启动”，换成 dxgi.dll / winmm.dll
+也一样。解决办法是先装 REFramework（这些游戏放行的加载入口）：
+
+1. 在游戏详情页点「下载并安装 REFramework」（约 13MB，自动装进游戏根目录）
+   官方下载通道在部分网络下连不上，程序会自动换镜像；都不行就用「用本地 ZIP 安装」，
+   自己去 github.com/praydog/REFramework-nightly 的 releases 下 REFramework.zip。
+2. 装完先启动一次游戏，让它加载框架（游戏目录里会生成 reframework 文件夹），然后退出。
+3. 回到工具里重新注入代理 DLL，之后游戏里就能开 DLSS 帧生成。
+
+不想留了：同一张卡片上有「卸载 REFramework」，会把覆盖过的 dinput8.dll 还原回去。
+
+几个实测经验（都是上游 issue 里的结论）
+--------------------------------------
+* 《光与影：33 号远征队》和《黑神话：悟空》的 DLSS 埋在 Plugins 深处（8 层），
+  现在扫描能正确认出，注入目录分别是 Sandfall\Binaries\Win64 和 b1\Binaries\Win64。
+* 远征队自带的 Streamline 插件是 2.7.30，只有 4X；倍率上限就用默认的 4X，
+  千万别开「ForcePluginFrames」去强推 6X（上游实测会让整个帧生成硬失败）。
+* 一个游戏在列表里只会有一条记录；如果你以前加重复了，游戏页会提示「合并重复条目」。
+* 同一个游戏目录里别留多个代理 DLL（虽然现在不致命了），只留一个最省事。
+
 机器要求
 --------
 Windows 10/11 x64、D3D12 游戏、NVIDIA 驱动带 NGX/NVAPI（建议 580 以上，
-591.86 / 610.74 实测可用）。显卡是 RTX 20 系（实验性）或 RTX 30 系（推荐）。
+591.86 / 610.74 实测可用）。显卡是 RTX 20/30 系（SM86 / SM75）。
 
 说明：本工具不含 NVIDIA 的运行库，需要按上面第一步自己下载；上游开源项目是
 github.com/sdli1995/dlssg_for_sm86。
