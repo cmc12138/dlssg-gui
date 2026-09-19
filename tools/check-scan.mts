@@ -27,9 +27,18 @@ console.log(`\n其中 ${capable.length} 个检测到 nvngx_dlssg.dll（可以开
 for (const game of capable.slice(0, 25)) {
   console.log(`  ${game.source.toUpperCase().padEnd(5)} ${game.name}`)
   console.log(`        渲染目录 ${game.exeDir}`)
-  console.log(`        EXE ${game.exeName} · 候选目录 ${game.candidates.length} 个`)
+  console.log(
+    `        EXE ${game.exeName} · 候选目录 ${game.candidates.length} 个` +
+      (game.candidates[0]?.hasFsrFrameGen ? ' · 旁边有 FSR 帧生成' : '')
+  )
 }
 
-const upscalingOnly = result.games.filter((game) => !game.dlssgCapable && game.candidates.length > 0)
+const upscalingOnly = result.games.filter(
+  (game) => !game.dlssgCapable && game.candidates.some((candidate) => candidate.hasDlss)
+)
 console.log(`\n只有 DLSS 超分（无帧生成）的游戏 ${upscalingOnly.length} 个，例如：`)
 for (const game of upscalingOnly.slice(0, 8)) console.log(`  ${game.name} → ${game.exeDir}`)
+
+const neither = result.games.filter((game) => !game.dlssgCapable && !game.candidates.some((candidate) => candidate.hasDlss))
+console.log(`\n没有 NVIDIA DLSS 的游戏 ${neither.length} 个（渲染目录仍然会猜出来，但注入没有意义）`)
+for (const game of neither.slice(0, 5)) console.log(`  ${game.name} → ${game.exeDir || '（没找到 EXE 目录）'}`)

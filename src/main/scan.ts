@@ -15,10 +15,42 @@ const SKIP_DIRS = new Set([
   'support',
   'tools',
   'docs',
-  'node_modules'
+  'node_modules',
+  // 纯素材目录：UE 游戏的 Content/Paks 动辄几万个文件，翻它没有意义（DLL 不会在这下面）
+  'content',
+  'paks',
+  'movies',
+  'audio',
+  'localization',
+  'shaders',
+  'shadercache',
+  'savegames',
+  'saved',
+  'videos',
+  'derivedatacache',
+  'webcache'
 ])
 
-const HELPER_EXE = /(unitycrashhandler|crashreport|crashpad|crashhandler|launcher|setup|unins|prereq|eossdk|epicwebhelper|activation|vcredist|dxsetup|dotnet|report)/i
+const HELPER_EXE = /(unitycrashhandler|crashreport|crashpad|crashhandler|crashsender|launcher|setup|installer|unins|prereq|eossdk|epicwebhelper|activation|vcredist|dxsetup|dotnet|report|updater|patcher|dowser|bootstrap)/i
+
+/** 帧生成相关的运行库文件名：NVIDIA DLSS-G（含 Streamline 插件） */
+const DLSSG_DLLS = ['nvngx_dlssg.dll', 'sl.dlss_g.dll']
+/** DLSS 超分 / 光线重建 */
+const DLSS_DLLS = ['nvngx_dlss.dll', 'sl.dlss.dll']
+/** AMD FSR3 帧生成（放在渲染 EXE 旁边，是判断"渲染目录"的强信号） */
+const FSR_FG_DLLS = ['amd_fidelityfx_framegeneration_dx12.dll', 'amd_fidelityfx_framegeneration_dx12_dx12.dll']
+
+/** 常见的渲染 EXE 目录命名 */
+const RENDER_DIR_PATTERNS = [
+  /(^|\\)binaries\\win64$/i,
+  /(^|\\)binaries\\win32$/i,
+  /(^|\\)bin\\x64(_dx12|_vk)?$/i,
+  /(^|\\)win64$/i,
+  /(^|\\)binaries$/i
+]
+
+/** 找游戏目录时最多下探多少层：UE 游戏的 DLSS 插件在 Plugins\...\Binaries\ThirdParty\Win64（约 8 层） */
+const MAX_SCAN_DEPTH = 9
 
 export interface ScanProgress {
   done: number
@@ -194,42 +226,84 @@ async function scanGog(onProgress?: (p: ScanProgress) => void, knownKeys?: Set<s
   return { games, warnings }
 }
 
-/** 在一个游戏目录里找可能的渲染 EXE 目录（按是否带 nvngx_dlssg.dll / nvngx_dlss.dll 判断）。 */
+/**
+ * 在一个游戏目录里找可能的渲染 EXE 目录。
+ *
+ * 关键点：DLSS-G 的 DLL 和渲染 EXE 不一定在同一层。
+ * UE 游戏（例如《光与影：33 号远征队》）把 DLSS 整套放在
+ * `<项目>\Plugins\NVIDIA\...\Binaries\ThirdParty\Win64\`（约 8 层深），
+ * 而渲染 EXE 在 `<项目>\Binaries\Win64\`。所以这里分两步：
+ *   1. 把整棵树翻一遍（限制深度 + 跳过素材目录），判断**游戏整体**有没有 DLSS-G / DLSS；
+ *   2. 在所有含 EXE 的目录里挑出最像渲染目录的那个（旁边有帧生成相关 DLL、命名符合惯例、EXE 最大）。
+ */
 export async function findCandidates(gameDir: string): Promise<DetectedExe[]> {
-  const dirs = await walkDirs(gameDir, { maxDepth: 4, skipDirNames: SKIP_DIRS })
-  const candidates: DetectedExe[] = []
+  const dirs = await walkDirs(gameDir, { maxDepth: MAX_SCAN_DEPTH, skipDirNames: SKIP_DIRS })
+
+  let gameHasDlssg = false
+  let gameHasDlss = false
+  for (const [, files] of dirs) {
+    const lower = files.map((file) => file.toLowerCase())
+    if (DLSSG_DLLS.some((name) => lower.includes(name))) gameHasDlssg = true
+    if (DLSS_DLLS.some((name) => lower.includes(name))) gameHasDlss = true
+  }
+
+  const scored: { candidate: DetectedExe; score: number }[] = []
   for (const [dir, files] of dirs) {
-    const lower = files.map((f) => f.toLowerCase())
-    const hasDlssg = lower.includes('nvngx_dlssg.dll')
-    const hasDlss = lower.includes('nvngx_dlss.dll')
-    if (!hasDlssg && !hasDlss) continue
-    const exes = files.filter((f) => f.toLowerCase().endsWith('.exe') && !HELPER_EXE.test(f))
+    const lower = files.map((file) => file.toLowerCase())
+    const exes = files.filter((file) => file.toLowerCase().endsWith('.exe') && !HELPER_EXE.test(file))
+    if (exes.length === 0) continue
+
+    const hasFrameGenDll = DLSSG_DLLS.some((name) => lower.includes(name))
+    const hasSuperResDll = DLSS_DLLS.some((name) => lower.includes(name))
+    const hasFsrFrameGen = FSR_FG_DLLS.some((name) => lower.includes(name))
+    const looksLikeRenderDir = RENDER_DIR_PATTERNS.some((pattern) => pattern.test(dir))
+
     let best: { name: string; size: number } | undefined
     for (const exe of exes) {
-      const size = await stat(join(dir, exe)).then((s) => s.size).catch(() => 0)
+      const size = await stat(join(dir, exe)).then((info) => info.size).catch(() => 0)
       if (!best || size > best.size) best = { name: exe, size }
     }
-    const fallbackExes = files.filter((f) => f.toLowerCase().endsWith('.exe'))
-    const exeName = best?.name ?? fallbackExes[0] ?? ''
-    candidates.push({ dir, exeName, hasDlssg, hasDlss, recommended: hasDlssg })
+    if (!best) continue
+
+    // 权重：旁边就是帧生成 DLL > 旁边是超分 DLL / FSR 帧生成 > 目录命名像渲染目录 > EXE 大
+    const score =
+      (hasFrameGenDll ? 1e9 : 0) +
+      (hasFsrFrameGen ? 5e8 : 0) +
+      (hasSuperResDll ? 5e8 : 0) +
+      (looksLikeRenderDir ? 2e8 : 0) +
+      Math.min(best.size, 1e8)
+
+    scored.push({
+      score,
+      candidate: {
+        dir,
+        exeName: best.name,
+        hasDlssg: gameHasDlssg,
+        hasDlss: gameHasDlss,
+        hasFsrFrameGen,
+        recommended: false
+      }
+    })
   }
-  candidates.sort((a, b) => Number(b.hasDlssg) - Number(a.hasDlssg) || Number(b.recommended) - Number(a.recommended))
+
+  scored.sort((a, b) => b.score - a.score)
+  const candidates = scored.map((item) => item.candidate)
+  if (candidates.length > 0) candidates[0].recommended = true
   return candidates
 }
 
 /** 探测单个游戏目录：找候选 EXE 目录并判断是否具备 DLSS-G。 */
 export async function detectGameFolder(folder: string): Promise<{ candidates: DetectedExe[]; dlssgCapable: boolean; exeDir: string; exeName: string }> {
   const candidates = await findCandidates(folder)
-  const primary = candidates.find((c) => c.hasDlssg) ?? candidates[0]
-  let exeDir = primary?.dir ?? folder
-  let exeName = primary?.exeName ?? ''
-  if (!exeName) {
-    const exes = await readdir(folder, { withFileTypes: true }).catch(() => [])
-    const list = exes.filter((e) => e.isFile() && e.name.toLowerCase().endsWith('.exe') && !HELPER_EXE.test(e.name))
-    if (list.length > 0) exeName = list[0].name
-    exeDir = folder
+  const primary = candidates[0]
+  const dlssgCapable = candidates.some((candidate) => candidate.hasDlssg)
+  if (primary) {
+    return { candidates, dlssgCapable, exeDir: primary.dir, exeName: primary.exeName }
   }
-  return { candidates, dlssgCapable: candidates.some((c) => c.hasDlssg), exeDir, exeName }
+  // 一个 EXE 都没找到（或者只有被排除的 helper），退回到游戏根目录
+  const entries = await readdir(folder, { withFileTypes: true }).catch(() => [])
+  const list = entries.filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.exe') && !HELPER_EXE.test(entry.name))
+  return { candidates, dlssgCapable, exeDir: folder, exeName: list[0]?.name ?? '' }
 }
 
 async function mapWithLimit<T, R>(items: T[], limit: number, worker: (item: T, index: number) => Promise<R>): Promise<R[]> {

@@ -12,7 +12,7 @@ const { defaultIniConfig, parseIniConfig, serializeIniConfig, normalizeIniConfig
 const { detectPackages, importFromFolder, importFromZip } = await import('../src/main/library')
 const { applyInstall, getGameStatus, planInstall, restoreGame, updateIniOnly } = await import('../src/main/inject')
 const { getPackage, listPackages, saveGame, listGames } = await import('../src/main/db')
-const { findCandidates } = await import('../src/main/scan')
+const { findCandidates, detectGameFolder } = await import('../src/main/scan')
 const { ensureDataDirs } = await import('../src/main/paths')
 const { gitBlobSha, packagesFromTree } = await import('../src/main/upstream')
 const { sameGame, findExactDuplicateGroups, findDuplicateGroups, listDuplicateGames, mergeDuplicateGames } = await import('../src/main/games')
@@ -357,6 +357,48 @@ describe('游戏目录探测', () => {
     assert.equal(candidates[0].hasDlssg, true)
     assert.equal(candidates[0].dir, exeDir)
     assert.equal(candidates[0].exeName, 'Game.exe')
+  })
+
+  // 《光与影：33 号远征队》这类 UE 游戏：DLSS 整套在 Plugins 深处的 ThirdParty 目录（8 层），
+  // 渲染 EXE 却在 <项目>\Binaries\Win64。旧版只扫 4 层，会把这种游戏判成"不支持帧生成"。
+  it('UE 布局：DLSS 在 8 层深的 Plugins 里，也要认出游戏支持帧生成并选对渲染目录', async () => {
+    const root = join(workRoot, 'ue-game')
+    const win64 = join(root, 'Sandfall', 'Binaries', 'Win64')
+    const streamline = join(root, 'Sandfall', 'Plugins', 'NVIDIA', 'StreamlineCore', 'Binaries', 'ThirdParty', 'Win64')
+    const dlssPlugin = join(root, 'Sandfall', 'Plugins', 'NVIDIA', 'DLSS', 'Binaries', 'ThirdParty', 'Win64')
+    mkdirSync(win64, { recursive: true })
+    mkdirSync(streamline, { recursive: true })
+    mkdirSync(dlssPlugin, { recursive: true })
+    writeFileSync(join(root, 'Expedition33_Steam.exe'), 'launcher')
+    writeFileSync(join(win64, 'SandFall-Win64-Shipping.exe'), Buffer.alloc(4096, 7))
+    writeFileSync(join(win64, 'amd_fidelityfx_framegeneration_dx12.dll'), 'fsr fg')
+    writeFileSync(join(streamline, 'nvngx_dlssg.dll'), fakePe(21, 2048))
+    writeFileSync(join(streamline, 'sl.dlss_g.dll'), 'streamline fg plugin')
+    writeFileSync(join(streamline, 'sl.common.dll'), 'streamline common')
+    writeFileSync(join(dlssPlugin, 'nvngx_dlss.dll'), fakePe(22, 2048))
+
+    const detection = await detectGameFolder(root)
+    assert.equal(detection.dlssgCapable, true, '深度 8 的 nvngx_dlssg.dll 也要被认出来')
+    assert.equal(detection.exeDir, win64, '部署目标是渲染 EXE 目录，不是插件目录')
+    assert.equal(detection.exeName, 'SandFall-Win64-Shipping.exe')
+    assert.equal(detection.candidates[0].recommended, true)
+    assert.equal(detection.candidates[0].hasFsrFrameGen, true)
+  })
+
+  it('Unity 布局：根目录有 nvngx_dlss.dll 时，不会被更大的 Launcher 子目录抢走', async () => {
+    const root = join(workRoot, 'unity-game')
+    mkdirSync(join(root, 'Launcher'), { recursive: true })
+    writeFileSync(join(root, 'Cities2.exe'), Buffer.alloc(512, 1))
+    writeFileSync(join(root, 'UnityCrashHandler64.exe'), 'crash handler')
+    writeFileSync(join(root, 'nvngx_dlss.dll'), fakePe(31, 2048))
+    writeFileSync(join(root, 'Launcher', 'dowser.exe'), Buffer.alloc(200000, 3))
+    writeFileSync(join(root, 'Launcher', 'launcher-installer-windows.exe'), Buffer.alloc(400000, 4))
+
+    const detection = await detectGameFolder(root)
+    assert.equal(detection.exeDir, root)
+    assert.equal(detection.exeName, 'Cities2.exe')
+    assert.equal(detection.dlssgCapable, false)
+    assert.equal(detection.candidates[0].hasDlss, true)
   })
 })
 

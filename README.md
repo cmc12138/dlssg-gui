@@ -36,7 +36,7 @@ DLSS-G 运行库塞进游戏进程，但它只有命令行/手工复制的用法
 | 模块 | 说明 |
 | --- | --- |
 | 游戏扫描 | 自动读 Steam（`libraryfolders.vdf` + `appmanifest_*.acf`）、Epic（`.item` 清单）、GOG（注册表），也支持手动选目录 |
-| DLSS-G 探测 | 按目录里的 `nvngx_dlssg.dll` / `nvngx_dlss.dll` 判定「能不能开帧生成」，并给出候选渲染 EXE 目录 |
+| DLSS-G 探测 | 翻整棵目录树找 `nvngx_dlssg.dll` / `sl.dlss_g.dll`（UE 游戏把 DLSS 放在 `Plugins\NVIDIA\...\Binaries\ThirdParty\Win64`，**最深下探 9 层**），再按「旁边就是帧生成/超分 DLL、目录命名像渲染目录、EXE 最大」挑出真正的渲染 EXE 目录 |
 | **上游跟踪** | 用 GitHub API 读仓库默认分支、最近提交、发行版与整棵树，**自动发现所有含 `version.dll` 的发布包目录**（新增版本会自动出现），并用 git blob 哈希比对本地已导入的版本，标出「有更新」 |
 | 运行库管理 | 一键下载发现的发布包、导入 ZIP（GitHub 的 Download ZIP 里含多个版本会一起导入）、导入文件夹、直接指定单个 DLL |
 | 每游戏配置 | 独立保存运行库、代理名、优化档位、倍率上限、渲染预设、日志等级、Runtime 键，以及「可选键目录」里的高级键与任意自定义键 |
@@ -139,11 +139,13 @@ settings.json
 
 ## 验证情况（本机实测）
 
-- `npm run typecheck` 通过；`npm test` **21 项全通过**（ini 往返与档位/默认值、三态键、文件夹与 ZIP 导入、
+- `npm run typecheck` 通过；`npm test` **23 项全通过**（ini 往返与档位/默认值、三态键、文件夹与 ZIP 导入、
   注入→状态→改配置→拒绝还原→强制还原全流程、多代理不再阻塞、重复条目判定与合并（含备份迁移后仍能还原）、
-  git blob 哈希、上游树解析）。
-- 真实环境扫描：读到 5 个 Steam 库、24 个游戏，0.5s 完成，正确识别出 5 个带 `nvngx_dlssg.dll` 的游戏
-  （Call of Duty HQ / Death Stranding 2 / No Man's Sky / PRAGMATA / The Witcher 3 DX12）与 3 个只有超分的游戏。
+  UE/Unity 两种游戏目录布局的探测、git blob 哈希、上游树解析）。
+- 真实环境扫描：读到 5 个 Steam 库、24 个游戏，0.3s 完成，**7 个**检测到 DLSS 帧生成能力
+  （黑神话悟空 / COD HQ / **光与影：33 号远征队** / 死亡搁浅 2 / 无人深空 / PRAGMATA / 巫师 3 DX12），
+  渲染目录全部选中正确（例如远征队 → `Sandfall\Binaries\Win64`，悟空 → `b1\Binaries\Win64`），
+  另外认出 3 个只有 DLSS 超分的游戏。
 - 上游跟踪实测（2026-09-18，上游 0.3.4）：自动发现 4 个发布包 —— 根目录（310.9，6X，主 DLL 30,011,168 字节）、
   `310.1`（4X，27,986,208 字节）、`archive/0.1.0`、`archive/0.2.4`；`310.1` 目录没有自己的 ini，正确回退到仓库根目录那份。
 - 「下载」实测：主分支发布包 6 个文件全部下载 → 导入 → SHA-256 校验通过 → 重新比对显示「已是最新」。
@@ -201,6 +203,24 @@ docs/              截图与给测试机的使用说明
 帧生成没生效时的排查顺序：`dlssg_sm86\logs\loader_*.jsonl` 里应有 `runtime_redirect`（代理已生效）→
 `backend_*.jsonl` 里应有 `install` 且 `route active=true`（路由已激活）。缺失通常是驱动/运行库不匹配，会回退原厂路径。
 把 `Level` 调到 2 或 3 再跑一次游戏；上游 0.3.x 还有始终开启的 `fg_gate_*` 记录，能看出是哪道闸门拦住了。
+
+## 游戏里为什么看不到帧生成选项
+
+三件事是分开的，别混在一起：
+
+1. **游戏带不带 DLSS-G 运行库** —— 这是本工具扫描出来的「支持帧生成」，只看文件，跟显卡无关。
+   注意 UE 游戏的 DLSS 埋在 `Plugins\NVIDIA\StreamlineCore\Binaries\ThirdParty\Win64`（约 8 层深），
+   例如《光与影：33 号远征队》就在这一层带 `nvngx_dlssg.dll`（310.2.1）与 `sl.dlss_g.dll`（2.7.30）。
+2. **显卡和游戏那道闸门** —— Streamline 的 `sl.dlss_g` 插件默认要求 AD100（Ada/40 系）以上，
+   在 20/30 系上游戏会判定「本硬件不支持」并把帧生成选项藏起来。上游正是改写架构上报
+   （`[Compatibility] SpoofArchToGame`，不写 = 自动、对 Turing 与 Ampere 都报 Blackwell）来放行这道闸门，
+   所以**注入是必须的**，光有 DLL 不够。
+3. **能不能到 6X** —— 取决于游戏自带 `sl.dlss_g.dll` 的版本：≥2.11.1 才支持 6X；
+   33 号远征队带的是 2.7.30（4X 档），上游实测对这类游戏强推 6X（`ForcePluginFrames`）会让整个帧生成硬失败，别开。
+
+另外要区分 **AMD FSR3 帧生成**：不少游戏（33 号远征队、死亡搁浅 2 等）在渲染 EXE 旁边放了
+`amd_fidelityfx_framegeneration_dx12.dll`，这是 AMD 的帧生成，任何卡都能开，
+所以「游戏里有帧生成选项」不等于「DLSS 帧生成可用」。本工具在候选目录后面会标出「含 FSR 帧生成」。
 
 ## 已知限制
 

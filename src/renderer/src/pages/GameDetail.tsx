@@ -289,9 +289,9 @@ export function GameDetail({ gameId, onBack, onGoLibrary }: { gameId: string; on
                     }}
                     options={game.candidates.map((candidate) => ({
                       value: candidate.dir,
-                      label: `${candidate.hasDlssg ? '★ ' : ''}${truncateMiddle(candidate.dir, 60)}${
+                      label: `${candidate.recommended ? '★ ' : ''}${truncateMiddle(candidate.dir, 60)}${
                         candidate.exeName ? ` (${candidate.exeName})` : ''
-                      }`
+                      }${candidate.hasFsrFrameGen ? ' · 含 FSR 帧生成' : ''}`
                     }))}
                   />
                 </Field>

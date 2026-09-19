@@ -85,9 +85,13 @@ export interface DetectedExe {
   /** 渲染 EXE 目录 */
   dir: string
   exeName: string
+  /** 游戏整体（整棵目录树）是否带 DLSS-G：nvngx_dlssg.dll 或 sl.dlss_g.dll */
   hasDlssg: boolean
+  /** 游戏整体是否带 DLSS 超分：nvngx_dlss.dll 或 sl.dlss.dll */
   hasDlss: boolean
-  /** 同目录里最大的 EXE，通常就是渲染进程 */
+  /** 这个目录里有没有 AMD FSR3 帧生成（放在渲染 EXE 旁边，是"这里就是渲染目录"的强信号） */
+  hasFsrFrameGen: boolean
+  /** 排序第一的候选，通常是渲染 EXE 目录 */
   recommended: boolean
 }
 
