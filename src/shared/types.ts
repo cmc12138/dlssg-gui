@@ -189,6 +189,24 @@ export interface ScannedGame {
   known: boolean
 }
 
+/** 添加游戏的结果：created=false 表示同一个游戏已经在列表里（不会重复添加） */
+export interface AddGameResult {
+  game: GameEntry
+  created: boolean
+}
+
+/** 重复条目分组（同一个游戏被加了多条） */
+export interface DuplicateReport {
+  groups: GameEntry[][]
+  entries: number
+}
+
+export interface MergeResult {
+  mergedGroups: number
+  removedEntries: number
+  details: string[]
+}
+
 export interface AppSettings {
   /** 默认使用的运行库包 */
   defaultPackageId?: string

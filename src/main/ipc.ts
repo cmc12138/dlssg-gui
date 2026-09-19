@@ -11,6 +11,7 @@ import { getSeed, invalidateRemoteCache, listRemoteVariants } from './remote-var
 import { checkUpstream } from './upstream'
 import { listGameLogs, readLogFile } from './logs'
 import { detectGameFolder, gameKey, scanLibraries } from './scan'
+import { listDuplicateGames, mergeDuplicateGames, sameGame } from './games'
 import { detectEnvironment } from './env'
 import { backupsDir } from './paths'
 import { removeIfExists } from './fsutil'
@@ -157,8 +158,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     const detection = await detectGameFolder(target)
     const name = basename(target) || target
     const now = new Date().toISOString()
-    const game: GameEntry = {
-      id: createId(name),
+
+    // 先查重：同一个游戏只允许有一条记录，否则会各带一份配置、状态互相干扰
+    const existing = await listGames()
+    const probe: GameEntry = {
+      id: 'probe',
       name,
       source: 'manual',
       installDir: target,
@@ -171,8 +175,22 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       createdAt: now,
       updatedAt: now
     }
+    const duplicate = existing.find((game) => sameGame(game, probe, true))
+    if (duplicate) {
+      return { game: duplicate, created: false }
+    }
+
+    const game: GameEntry = { ...probe, id: createId(name) }
     await saveGame(game)
-    return game
+    return { game, created: true }
+  })
+  ipcMain.handle(IPC.gamesDuplicates, () => listDuplicateGames())
+  ipcMain.handle(IPC.gamesMergeDuplicates, async () => {
+    try {
+      return await mergeDuplicateGames()
+    } catch (error) {
+      throw serializeError(error)
+    }
   })
   ipcMain.handle(IPC.gamesDetect, async (_event, folder: string): Promise<DetectResponse> => {
     const detection = await detectGameFolder(folder)

@@ -15,6 +15,7 @@ const { getPackage, listPackages, saveGame, listGames } = await import('../src/m
 const { findCandidates } = await import('../src/main/scan')
 const { ensureDataDirs } = await import('../src/main/paths')
 const { gitBlobSha, packagesFromTree } = await import('../src/main/upstream')
+const { sameGame, findExactDuplicateGroups, findDuplicateGroups, listDuplicateGames, mergeDuplicateGames } = await import('../src/main/games')
 
 import type { GameEntry } from '../src/shared/types'
 
@@ -177,6 +178,84 @@ describe('运行库导入', () => {
     const legacy = result.packages.find((pkg) => pkg.name.includes('310.1'))
     assert.ok(legacy, '应该识别出 310.1 目录')
     assert.equal(legacy?.maxMultiplier, 4)
+  })
+})
+
+describe('重复条目与合并', () => {
+  const root = join(workRoot, 'dup-game')
+  let packageId = ''
+
+  before(async () => {
+    ensureDataDirs()
+    await importFromFolder(join(workRoot, 'release'))
+    packageId = (await listPackages())[0].id
+  })
+
+  it('同目录判定：严格只认完全相同的目录，宽松还认父子目录', () => {
+    const make = (id: string, exeDir: string, installDir?: string): GameEntry => ({
+      ...gameEntry(id, exeDir),
+      installDir
+    })
+    const a = make('a', join(root, 'b1', 'Binaries', 'Win64'), root)
+    const b = make('b', join(root, 'b1', 'Binaries', 'Win64'))
+    const child = make('c', join(root, 'b1', 'Binaries', 'Win64', 'sub'))
+    const other = make('d', join(workRoot, 'another-game'))
+
+    assert.equal(sameGame(a, b, true), true, '渲染目录相同算重复')
+    assert.equal(sameGame(a, b, false), true)
+    assert.equal(sameGame(b, child, true), false, '父子目录在严格模式下不算重复')
+    assert.equal(sameGame(b, child, false), true)
+    assert.equal(sameGame(b, other, false), false)
+
+    assert.equal(findExactDuplicateGroups([a, b, other]).length, 1)
+    assert.equal(findDuplicateGroups([b, child]).length, 1)
+  })
+
+  it('合并后只留一条，注入记录和备份都跟着走，还能正常还原', async () => {
+    const { exeDir } = makeGame(root)
+    const keeper = gameEntry('dup-keeper', exeDir)
+    keeper.installDir = root
+    await saveGame(keeper)
+
+    const installed = await applyInstall({
+      gameId: keeper.id,
+      packageId,
+      proxyName: 'version.dll',
+      config: keeper.config
+    })
+    assert.equal(installed.ok, true, installed.message)
+
+    // 模拟旧版本留下的重复条目：同一个游戏目录又加了一条，配置还不一样
+    const duplicate = gameEntry('dup-second', exeDir)
+    duplicate.installDir = root
+    duplicate.config = { ...duplicate.config, optimized: 3, maxGeneratedFrames: 5 }
+    duplicate.dlssgCapable = false
+    await saveGame(duplicate)
+
+    const report = await listDuplicateGames()
+    assert.equal(report.groups.length, 1)
+    assert.equal(report.entries, 2)
+
+    const merged = await mergeDuplicateGames()
+    assert.equal(merged.mergedGroups, 1)
+    assert.equal(merged.removedEntries, 1)
+
+    const remaining = (await listGames()).filter((game) => game.installDir === root)
+    assert.equal(remaining.length, 1, '合并后同一个游戏只剩一条')
+    const survivor = remaining[0]
+    assert.ok(survivor.install, '注入记录要保留下来')
+    assert.equal(survivor.install?.proxyName, 'version.dll')
+    assert.ok(
+      survivor.history.some((entry) => entry.message.includes('合并')),
+      '历史里应该有合并记录'
+    )
+    assert.equal(await listDuplicateGames().then((item) => item.entries), 0)
+
+    // 备份目录被搬到了保留条目下，仍然可以还原成注入前的样子
+    const restored = await restoreGame(survivor.id)
+    assert.equal(restored.ok, true, restored.message)
+    assert.equal(readFileSync(join(exeDir, 'version.dll'), 'utf8'), '原始的游戏自带 version.dll')
+    assert.equal(existsSync(join(exeDir, 'dlssg_sm86.ini')), false)
   })
 })
 

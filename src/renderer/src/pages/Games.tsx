@@ -1,5 +1,5 @@
-import { useMemo, useState, type JSX } from 'react'
-import type { GameEntry } from '@shared/types'
+import { useEffect, useMemo, useState, type JSX } from 'react'
+import type { DuplicateReport, GameEntry } from '@shared/types'
 import { Alert, Badge, Button, Card, EmptyState, ProgressBar, Select, Spinner, TextInput } from '../components/ui'
 import { useApp } from '../state'
 import { STATE_LABEL, STATE_TONE, truncateMiddle } from '../lib/format'
@@ -9,6 +9,14 @@ export function Games({ onOpenGame }: { onOpenGame: (id: string) => void }): JSX
   const [filter, setFilter] = useState<'all' | 'capable' | 'installed'>('all')
   const [keyword, setKeyword] = useState('')
   const [busy, setBusy] = useState<string>()
+  const [duplicates, setDuplicates] = useState<DuplicateReport>()
+
+  useEffect(() => {
+    void window.api
+      .duplicateGames()
+      .then((report) => setDuplicates(report.entries > 0 ? report : undefined))
+      .catch(() => undefined)
+  }, [app.games.length])
 
   const filtered = useMemo(() => {
     const list = app.games.filter((game) => {
@@ -24,12 +32,35 @@ export function Games({ onOpenGame }: { onOpenGame: (id: string) => void }): JSX
   const addGame = async (installDir: string): Promise<void> => {
     setBusy(installDir)
     try {
-      const game = await window.api.addGameFromFolder(installDir)
+      const result = await window.api.addGameFromFolder(installDir)
       await app.refreshGames()
-      if (game) await app.refreshStatuses([game.id])
-      app.notify('已添加到游戏列表', 'ok')
+      if (result) {
+        await app.refreshStatuses([result.game.id])
+        if (result.created) app.notify('已添加到游戏列表', 'ok')
+        else app.notify(`「${result.game.name}」已经在列表里了，已选中原来那条（同一个游戏只保留一份配置）`, 'info')
+      }
     } catch (error) {
       app.notify(`添加失败：${(error as Error).message}`, 'bad')
+    } finally {
+      setBusy(undefined)
+    }
+  }
+
+  const mergeDuplicates = async (): Promise<void> => {
+    setBusy('merge')
+    try {
+      const result = await window.api.mergeDuplicates()
+      await app.refreshGames()
+      await app.refreshStatuses()
+      setDuplicates(undefined)
+      app.notify(
+        result.mergedGroups > 0
+          ? `已合并 ${result.mergedGroups} 组重复条目，移除 ${result.removedEntries} 条\n${result.details.join('\n')}`
+          : '没有需要合并的重复条目',
+        'ok'
+      )
+    } catch (error) {
+      app.notify(`合并失败：${(error as Error).message}`, 'bad')
     } finally {
       setBusy(undefined)
     }
@@ -68,6 +99,25 @@ export function Games({ onOpenGame }: { onOpenGame: (id: string) => void }): JSX
 
       {app.scan.running && app.scan.progress && (
         <ProgressBar done={app.scan.progress.done} total={app.scan.progress.total} label={app.scan.progress.label} />
+      )}
+
+      {duplicates && (
+        <Alert tone="warn" title={`发现 ${duplicates.groups.length} 组重复条目：同一个游戏被加了多条`}>
+          <ul className="list">
+            {duplicates.groups.slice(0, 6).map((group) => (
+              <li key={group[0].id}>
+                {group.map((game) => game.name).join(' / ')}
+                <span className="muted small">（共 {group.length} 条 · {group[0].exeDir}）</span>
+              </li>
+            ))}
+          </ul>
+          <div className="row" style={{ marginTop: 10 }}>
+            <Button size="sm" variant="primary" onClick={() => void mergeDuplicates()} disabled={busy === 'merge'}>
+              {busy === 'merge' ? '合并中…' : '合并重复条目'}
+            </Button>
+            <span className="muted small">保留有注入记录的那条（否则保留最早创建的），历史与备份会并过去，其余条目删除</span>
+          </div>
+        </Alert>
       )}
 
       {app.scan.warnings.length > 0 && (

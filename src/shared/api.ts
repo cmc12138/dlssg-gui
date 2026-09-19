@@ -16,6 +16,9 @@ import type {
   ScannedGame,
   UpstreamStatus,
   VerifyResult,
+  AddGameResult,
+  DuplicateReport,
+  MergeResult,
   DetectedExe
 } from './types'
 
@@ -65,8 +68,10 @@ export interface DshApi {
 
   listGames(): Promise<GameEntry[]>
   scanGames(): Promise<ScanResponse>
-  addGameFromFolder(folder?: string): Promise<GameEntry | null>
+  addGameFromFolder(folder?: string): Promise<AddGameResult | null>
   detectFolder(folder: string): Promise<DetectResponse>
+  duplicateGames(): Promise<DuplicateReport>
+  mergeDuplicates(): Promise<MergeResult>
   updateGame(id: string, patch: Partial<GameEntry>): Promise<GameEntry>
   removeGame(id: string, deleteBackups?: boolean): Promise<void>
   gameStatus(id: string, withLogs?: boolean): Promise<GameStatus>
@@ -105,6 +110,8 @@ export const IPC = {
   gamesScan: 'games:scan',
   gamesAdd: 'games:add',
   gamesDetect: 'games:detect',
+  gamesDuplicates: 'games:duplicates',
+  gamesMergeDuplicates: 'games:merge-duplicates',
   gamesUpdate: 'games:update',
   gamesRemove: 'games:remove',
   gamesStatus: 'games:status',
