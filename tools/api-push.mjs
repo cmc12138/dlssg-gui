@@ -89,10 +89,12 @@ const tree = await apiCall('/git/trees', {
 })
 if (tree.sha !== localTree) throw new Error(`树校验失败：本地 ${localTree} 远端 ${tree.sha}`)
 
-const meta = git(['show', '-s', '--format=%an%x00%ae%x00%aI%x00%cn%x00%ce%x00%cI%x00%B', localSha]).split('\0')
-const [authorName, authorEmail, authorDate, committerName, committerEmail, committerDate, rawMessage] = meta
-// GitHub 会给 message 末尾补一个换行，这里先去掉已有尾部换行，生成的 commit 才能和本地字节一致（sha 相同）
-const message = rawMessage.replace(/\n+$/, '')
+const meta = git(['show', '-s', '--format=%an%x00%ae%x00%aI%x00%cn%x00%ce%x00%cI', localSha]).split('\0')
+const [authorName, authorEmail, authorDate, committerName, committerEmail, committerDate] = meta
+// 关键：message 必须原样取本地 commit 对象里的字节（含 git 的那个结尾换行），
+// GitHub 写对象时不补也不删换行，只有这样生成的 commit 才和本地逐字节一致（sha 相同）。
+const rawCommit = git(['cat-file', 'commit', localSha])
+const message = rawCommit.slice(rawCommit.indexOf('\n\n') + 2)
 
 const commit = await apiCall('/git/commits', {
   method: 'POST',
@@ -106,8 +108,8 @@ const commit = await apiCall('/git/commits', {
 })
 console.log(`远端提交 = ${commit.sha.slice(0, 10)}（本地 ${localSha.slice(0, 10)}）`)
 if (commit.sha !== localSha) {
-  // 字节格式：GitHub 存的是 message + 一个额外换行，时区偏移按我传的原样保留。
-  // 把远端 commit 原样在本地重建出来，这样本地引用能直接指过去，不会分叉。
+  // 兜底：万一 sha 不同（GitHub 侧改写了什么），就把远端 commit 原样在本地重建，
+  // 让引用能指过去，本地/远端不会分叉。
   console.warn('生成的 commit sha 与本地不同，正在本地重建该对象以保持一致…')
   const created = await apiCall(`/git/commits/${commit.sha}`)
   const offset = (iso) => {
@@ -120,7 +122,7 @@ if (commit.sha !== localSha) {
     `author ${created.author.name} <${created.author.email}> ${Math.floor(new Date(created.author.date).getTime() / 1000)} ${offset(authorDate)}`,
     `committer ${created.committer.name} <${created.committer.email}> ${Math.floor(new Date(created.committer.date).getTime() / 1000)} ${offset(committerDate)}`,
     '',
-    created.message + '\n\n'
+    created.message
   ].join('\n')
   const rebuiltSha = execFileSync('git', ['hash-object', '-t', 'commit', '-w', '--stdin'], { input: rebuilt, encoding: 'utf8' }).trim()
   if (rebuiltSha !== commit.sha) {
